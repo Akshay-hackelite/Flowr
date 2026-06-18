@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field,ConfigDict
+from pydantic import BaseModel, Field,ConfigDict,AliasChoices
 
 class Client(BaseModel):
     id: str
@@ -194,3 +194,56 @@ class TestWebhookRequest(BaseModel):
     from_phone: str
     text: str
     message_type: str = "text"
+
+class SendMessageConfig(BaseModel):
+    message: str
+
+class AskQuestionOptionConfig(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: Optional[str] = None
+    label: str
+    value: str
+
+    next_node_id: str = Field(
+        validation_alias=AliasChoices("next_node_id", "nextNodeId"),
+    )
+
+class AskQuestionConfig(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    question: str
+
+    input_type: Literal["text", "buttons", "list"] = Field(
+        default="text",
+        validation_alias=AliasChoices("input_type", "inputType"),
+    )
+
+    options: list[AskQuestionOptionConfig] = Field(default_factory=list)
+
+    variable_name: str = Field(
+        validation_alias=AliasChoices("variable_name", "variableName"),
+    )
+
+class ConditionRuleConfig(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    variable: str
+    operator: Literal["equals", "not_equals"] = "equals"
+    value: Any
+
+    next_node_id: str = Field(
+        validation_alias=AliasChoices("next_node_id", "nextNodeId"),
+    )
+
+class ConditionConfig(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    conditions: list[ConditionRuleConfig] = Field(default_factory=list)
+
+    default_next_node_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("default_next_node_id", "defaultNextNodeId"),
+    )
+
+

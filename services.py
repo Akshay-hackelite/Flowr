@@ -1,9 +1,9 @@
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
-
+from pydantic import ValidationError
 from fastapi import HTTPException
-
+import os
 from models import (
     FullSetupRequest,
     Workflow,
@@ -13,6 +13,9 @@ from models import (
     MessageRecord,
     NodeResponse,
     TestWebhookRequest,
+    SendMessageConfig,
+    AskQuestionConfig,
+    ConditionConfig,
 )
 from storage import (
     save_client,
@@ -20,7 +23,6 @@ from storage import (
     save_whatsapp_account,
     save_workflow,
     save_workflow_node,
-    mark_missing_nodes_deleted,
     get_whatsapp_account_by_phone_number_id,
     get_published_workflows_for_account,
     get_workflow_by_id,
@@ -63,11 +65,80 @@ def make_response_id():
 
 
 def get_variable_name_from_node(node: WorkflowNode) -> str | None:
-    return (
-        node.config.get("variable_name")
-        or node.config.get("variableName")
-    )
+    config = parse_node_config(node)
 
+    if isinstance(config, AskQuestionConfig):
+        return config.variable_name
+
+    return None
+
+def get_option_metadata(options):
+    return [
+        option.model_dump(mode="python")
+        for option in options
+    ]
+
+def get_option_display_labels(options): #This returns full option objects into option labels:
+    return [option.label for option in options]
+
+def find_selected_option( #The user replied with some text of some question node then Which option did they select?
+    config: AskQuestionConfig,
+    user_text: str,
+):
+    for option in config.options:
+        possible_matches = {
+            option.label,
+            option.value,
+        }
+
+        if option.id:
+            possible_matches.add(option.id)
+
+        if user_text in possible_matches:
+            return option
+
+    return None
+
+
+NODE_CONFIG_MODELS = {
+    "send_message": SendMessageConfig,
+    "ask_question": AskQuestionConfig,
+    "condition": ConditionConfig,
+}
+
+def parse_node_config(node: WorkflowNode):
+    config_model = NODE_CONFIG_MODELS.get(node.type)
+
+    if not config_model:
+        raise ValueError(f"Unsupported node type: {node.type}")
+
+    return config_model.model_validate(node.config) 
+
+'''what this line do config_model.model_validate(node.config)?
+Here node.config is a normal dict, and model_validate() checks it against the selected config model(class), then returns a proper Pydantic object.raw_config = {
+    "question": "What do you need help with?",
+    "input_type": "buttons",
+    "variable_name": "issue_type",
+    "options": [
+        {
+            "id": "track_order",
+            "label": "Track Order",
+            "value": "Track Order",
+            "next_node_id": "node:3",
+        }
+    ],
+}
+
+This is just a dict.
+
+Now validate it:
+
+config = AskQuestionConfig.model_validate(raw_config)
+
+This one line does two things:
+
+1. Checks if raw_config is valid AskQuestionConfig data.
+2. Returns an AskQuestionConfig object.'''
 
 def validate_full_setup(setup: FullSetupRequest):
     errors = []
@@ -96,7 +167,10 @@ def validate_full_setup(setup: FullSetupRequest):
     if len(node_ids) != len(node_id_set):
         errors.append("Duplicate node IDs found.")
 
-    if workflow.first_node_id not in node_id_set:
+    if not workflow.first_node_id:
+        errors.append("workflow.first_node_id is required.")
+
+    elif workflow.first_node_id not in node_id_set:
         errors.append("workflow.first_node_id must exist in nodes.")
 
     for node in nodes:
@@ -111,56 +185,96 @@ def validate_full_setup(setup: FullSetupRequest):
                 f"node '{node.id}' has invalid next_node_id '{node.next_node_id}'."
             )
 
-        if node.type == "send_message":
-            if not node.config.get("message"):
-                errors.append(
-                    f"send_message node '{node.id}' must have config.message."
-                )
+        # ----------------------------
+        # Config validation
+        # ----------------------------
 
-        elif node.type == "ask_question":
-            if not node.config.get("question"):
-                errors.append(
-                    f"ask_question node '{node.id}' must have config.question."
-                )
+        try:
+            config = parse_node_config(node)
 
-            if not get_variable_name_from_node(node):
-                errors.append(
-                    f"ask_question node '{node.id}' must have config.variable_name."
-                )
+        except ValidationError as error:
+            errors.append(
+                {
+                    "node_id": node.id,
+                    "node_type": node.type,
+                    "message": "Invalid node config.",
+                    "errors": error.errors(),
+                }
+            )
+            continue
 
-            input_type = node.config.get("inputType") or node.config.get("input_type")
+        except ValueError as error:
+            errors.append(
+                {
+                    "node_id": node.id,
+                    "node_type": node.type,
+                    "message": str(error),
+                }
+            )
+            continue
 
-            if input_type in ["buttons", "list"]:
-                options = node.config.get("options", [])
+        # ----------------------------
+        # Extra graph validation using parsed config
+        # ----------------------------
 
-                if not options:
+        if isinstance(config, AskQuestionConfig):
+            if config.input_type in ["buttons", "list"]:
+                if not config.options:
                     errors.append(
-                        f"ask_question node '{node.id}' uses {input_type} but has no options."
+                        f"ask_question node '{node.id}' uses {config.input_type} but has no options."
                     )
 
-                if len(options) != len(set(options)):
+                option_labels = [option.label for option in config.options]
+                option_values = [option.value for option in config.options]
+                option_ids = [
+                    option.id
+                    for option in config.options
+                    if option.id
+                ]
+
+                if len(option_labels) != len(set(option_labels)):
                     errors.append(
-                        f"ask_question node '{node.id}' has duplicate options."
+                        f"ask_question node '{node.id}' has duplicate option labels."
                     )
 
-        elif node.type == "condition":
-            conditions = node.config.get("conditions", [])
-            default_next_node_id = node.config.get("default_next_node_id")
+                if len(option_values) != len(set(option_values)):
+                    errors.append(
+                        f"ask_question node '{node.id}' has duplicate option values."
+                    )
 
-            if not conditions and not default_next_node_id:
+                if len(option_ids) != len(set(option_ids)):
+                    errors.append(
+                        f"ask_question node '{node.id}' has duplicate option ids."
+                    )
+
+                for index, option in enumerate(config.options):
+                    if option.next_node_id not in node_id_set:
+                        errors.append(
+                            f"ask_question node '{node.id}' option {index + 1} has invalid next_node_id."
+                        )
+
+            else:
+                if node.next_node_id and node.next_node_id not in node_id_set:
+                    errors.append(
+                        f"text ask_question node '{node.id}' has invalid next_node_id '{node.next_node_id}'."
+                    )
+
+        elif isinstance(config, ConditionConfig):
+            if not config.conditions and not config.default_next_node_id:
                 errors.append(
                     f"condition node '{node.id}' needs conditions or default_next_node_id."
                 )
 
-            for index, condition in enumerate(conditions):
-                next_node_id = condition.get("next_node_id")
-
-                if next_node_id not in node_id_set:
+            for index, condition in enumerate(config.conditions):
+                if condition.next_node_id not in node_id_set:
                     errors.append(
                         f"condition node '{node.id}' rule {index + 1} has invalid next_node_id."
                     )
 
-            if default_next_node_id and default_next_node_id not in node_id_set:
+            if (
+                config.default_next_node_id
+                and config.default_next_node_id not in node_id_set
+            ):
                 errors.append(
                     f"condition node '{node.id}' has invalid default_next_node_id."
                 )
@@ -174,8 +288,7 @@ def validate_full_setup(setup: FullSetupRequest):
             },
         )
 
-
-def save_full_setup(setup: FullSetupRequest):
+def save_full_setup(setup: FullSetupRequest): # in routes , it will come as FullSetupRequest object , u can see routes
     validate_full_setup(setup)
 
     workflow = setup.workflow
@@ -207,10 +320,6 @@ def save_full_setup(setup: FullSetupRequest):
     for node in nodes:
         save_workflow_node(node)
 
-    mark_missing_nodes_deleted(
-        workflow_id=workflow.id,
-        active_node_ids=workflow.node_ids,
-    )
 
     return {
         "message": "Setup saved successfully.",
@@ -288,24 +397,24 @@ def evaluate_condition_node(
     node: WorkflowNode,
     variables: dict[str, Any],
 ) -> str | None:
-    conditions = node.config.get("conditions", [])
-    default_next_node_id = node.config.get("default_next_node_id")
+    config = parse_node_config(node)
 
-    for condition in conditions:
-        variable = condition.get("variable")
-        operator = condition.get("operator", "equals")
-        expected_value = condition.get("value")
-        next_node_id = condition.get("next_node_id")
+    if not isinstance(config, ConditionConfig):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Node '{node.id}' is not a condition node.",
+        )
 
-        actual_value = variables.get(variable)
+    for condition in config.conditions:
+        actual_value = variables.get(condition.variable)
 
-        if operator == "equals" and actual_value == expected_value:
-            return next_node_id
+        if condition.operator == "equals" and actual_value == condition.value:
+            return condition.next_node_id
 
-        if operator == "not_equals" and actual_value != expected_value:
-            return next_node_id
+        if condition.operator == "not_equals" and actual_value != condition.value:
+            return condition.next_node_id
 
-    return default_next_node_id
+    return config.default_next_node_id
 
 
 def execute_workflow_from_node(
@@ -316,7 +425,7 @@ def execute_workflow_from_node(
 ):
     node_map = build_node_map(nodes)
     current_node_id = start_node_id
-    outgoing_messages = []
+    responses = []
     safety_counter = 0
 
     while current_node_id:
@@ -358,7 +467,15 @@ def execute_workflow_from_node(
         )
 
         if node.type == "send_message":
-            message_text = node.config.get("message")
+            config = parse_node_config(node)
+
+            if not isinstance(config, SendMessageConfig):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid config for send_message node '{node.id}'.",
+                )
+
+            message_text = config.message
 
             node_run.status = "success"
             node_run.completed_at = now_utc()
@@ -371,7 +488,7 @@ def execute_workflow_from_node(
                 message_type="text",
             )
 
-            outgoing_messages.append(
+            responses.append(
                 {
                     "type": "text",
                     "text": message.text,
@@ -383,10 +500,20 @@ def execute_workflow_from_node(
             save_workflow_run(run)
 
         elif node.type == "ask_question":
-            question = node.config.get("question")
-            input_type = node.config.get("inputType") or node.config.get("input_type", "text")
-            options = node.config.get("options", [])
-            variable_name = get_variable_name_from_node(node)
+            config = parse_node_config(node)
+
+            if not isinstance(config, AskQuestionConfig):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid config for ask_question node '{node.id}'.",
+                )
+
+            question = config.question
+            input_type = config.input_type
+            options = config.options
+            variable_name = config.variable_name
+            option_labels = get_option_display_labels(options)
+            option_metadata = get_option_metadata(options)
 
             node_run.status = "waiting_for_user"
             node_run.completed_at = None
@@ -395,10 +522,10 @@ def execute_workflow_from_node(
             message_type = "text"
 
             if input_type == "buttons":
-                message_type = "interactive_buttons"
+                message_type = "buttons"
 
             if input_type == "list":
-                message_type = "interactive_list"
+                message_type = "list"
 
             message = create_outgoing_message(
                 run=run,
@@ -406,19 +533,20 @@ def execute_workflow_from_node(
                 text=question,
                 message_type=message_type,
                 metadata={
-                    "inputType": input_type,
-                    "options": options,
-                    "storeAnswerIn": variable_name,
+                    "input_type": input_type,
+                    "options": option_metadata,
+                    "store_answer_in": variable_name,
                 },
             )
 
-            outgoing_messages.append(
+            responses.append(
                 {
                     "type": "question",
                     "question": message.text,
-                    "inputType": input_type,
-                    "options": options,
-                    "storeAnswerIn": variable_name,
+                    "input_type": input_type,
+                    "options": option_labels,
+                    "option_details": option_metadata,
+                    "store_answer_in": variable_name,
                 }
             )
 
@@ -431,7 +559,7 @@ def execute_workflow_from_node(
             return {
                 "status": "waiting_for_user",
                 "workflow_run_id": run.id,
-                "messages": outgoing_messages,
+                "messages": responses,
                 "variables": run.variables,
             }
 
@@ -460,7 +588,7 @@ def execute_workflow_from_node(
     return {
         "status": "completed",
         "workflow_run_id": run.id,
-        "messages": outgoing_messages,
+        "messages": responses,
         "variables": run.variables,
     }
 
@@ -509,13 +637,35 @@ def continue_existing_run(
             detail="Waiting node run not found.",
         )
 
-    options = waiting_node.config.get("options", [])
+    config = parse_node_config(waiting_node)
 
-    if options and user_text not in options:
+    if not isinstance(config, AskQuestionConfig):
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid option. Allowed options are: {options}",
+            detail="Waiting node config is not valid for ask_question.",
         )
+
+    selected_value = user_text
+    selected_label = user_text
+    selected_next_node_id = waiting_node.next_node_id
+
+    if config.input_type in ["buttons", "list"]: #currently if user didnt selected from the given buttons or list , it will throw error.
+        selected_option = find_selected_option(
+            config=config,
+            user_text=user_text,
+        )
+
+        if not selected_option:
+            allowed_options = get_option_display_labels(config.options)
+
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid option. Allowed options are: {allowed_options}",
+            )
+
+        selected_value = selected_option.value
+        selected_label = selected_option.label
+        selected_next_node_id = selected_option.next_node_id
 
     incoming_message = create_incoming_message(
         client_id=run.client_id,
@@ -528,16 +678,18 @@ def continue_existing_run(
         message_type=message_type,
     )
 
-    variable_name = get_variable_name_from_node(waiting_node)
+    variable_name = config.variable_name
 
     waiting_node_run.status = "success"
     waiting_node_run.user_input = {
         "variable_name": variable_name,
-        "value": user_text,
+        "value": selected_value,
+        "label": selected_label,
+        "raw_text": user_text,
         "message_id": incoming_message.id,
         "received_at": now_utc(),
     }
-    waiting_node_run.next_node_id = waiting_node.next_node_id
+    waiting_node_run.next_node_id = selected_next_node_id
     waiting_node_run.completed_at = now_utc()
     save_workflow_node_run(waiting_node_run)
 
@@ -550,23 +702,23 @@ def continue_existing_run(
         node_id=waiting_node.id,
         node_run_id=waiting_node_run.id,
         variable_name=variable_name,
-        question=waiting_node.config.get("question"),
-        response=user_text,
+        question=config.question,
+        response=selected_value,
     )
     save_node_response(response)
 
-    run.variables[variable_name] = user_text
+    run.variables[variable_name] = selected_value
     run.status = "active"
     run.waiting_at_node_id = None
     run.waiting_node_run_id = None
-    run.current_node_id = waiting_node.next_node_id
+    run.current_node_id = selected_next_node_id
     save_workflow_run(run)
 
     return execute_workflow_from_node(
         run=run,
         workflow=workflow,
         nodes=nodes,
-        start_node_id=waiting_node.next_node_id,
+        start_node_id=selected_next_node_id,
     )
 
 
@@ -709,3 +861,107 @@ def get_run_debug_data(workflow_run_id: str):
         "messages": get_run_messages(workflow_run_id),
         "node_responses": get_run_node_responses(workflow_run_id),
     }
+
+def verify_whatsapp_webhook(
+    mode: str | None,
+    verify_token: str | None,
+    challenge: str | None,
+):
+    expected_verify_token = os.getenv("WHATSAPP_VERIFY_TOKEN")
+
+    if not expected_verify_token:
+        raise HTTPException(
+            status_code=500,
+            detail="WHATSAPP_VERIFY_TOKEN is not configured.",
+        )
+
+    if mode == "subscribe" and verify_token == expected_verify_token and challenge:
+        return challenge
+
+    raise HTTPException(
+        status_code=403,
+        detail="WhatsApp webhook verification failed.",
+    )
+
+
+def extract_whatsapp_message(payload: dict[str, Any]) -> dict[str, Any] | None:
+    try:
+        entry = payload["entry"][0]
+        change = entry["changes"][0]
+        value = change["value"]
+
+        phone_number_id = value["metadata"]["phone_number_id"]
+
+        messages = value.get("messages", [])
+
+        if not messages:
+            return None
+
+        message = messages[0]
+
+        from_phone = message["from"]
+        message_type = message.get("type", "unknown")
+
+        text = ""
+
+        if message_type == "text":
+            text = message["text"]["body"]
+
+        elif message_type == "button":
+            button = message["button"]
+            text = button.get("payload") or button.get("text") or ""
+
+        elif message_type == "interactive":
+            interactive = message.get("interactive", {})
+            interactive_type = interactive.get("type")
+
+            if interactive_type == "button_reply":
+                button_reply = interactive.get("button_reply", {})
+                text = button_reply.get("id") or button_reply.get("title") or ""
+                message_type = "button_reply"
+
+            elif interactive_type == "list_reply":
+                list_reply = interactive.get("list_reply", {})
+                text = list_reply.get("id") or list_reply.get("title") or ""
+                message_type = "list_reply"
+
+            else:
+                text = ""
+
+        else:
+            text = ""
+
+        return {
+            "phone_number_id": phone_number_id,
+            "from_phone": from_phone,
+            "text": text,
+            "message_type": message_type,
+            "raw_message": message,
+        }
+
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def process_whatsapp_webhook_payload(payload: dict[str, Any]):
+    extracted = extract_whatsapp_message(payload)
+
+    if not extracted:
+        return {
+            "ignored": True,
+            "reason": "No supported incoming message found in webhook payload.",
+        }
+
+    if not extracted["text"]:
+        return {
+            "ignored": True,
+            "reason": f"Unsupported or empty message type: {extracted['message_type']}",
+        }
+
+    return process_incoming_message(
+        phone_number_id=extracted["phone_number_id"],
+        from_phone=extracted["from_phone"],
+        text=extracted["text"],
+        message_type=extracted["message_type"],
+        source="whatsapp_webhook",
+    )

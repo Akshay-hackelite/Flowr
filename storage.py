@@ -137,22 +137,6 @@ def save_workflow_node(node: WorkflowNode):
     )
 
 
-def mark_missing_nodes_deleted(workflow_id: str, active_node_ids: list[str]):
-    workflow_nodes_collection.update_many(
-        {
-            "workflow_id": workflow_id,
-            "id": {
-                "$nin": active_node_ids,
-            },
-        },
-        {
-            "$set": {
-                "deleted": True,
-                "updated_at": now_utc(),
-            }
-        },
-    )
-
 
 def get_workflow_nodes(workflow_id: str) -> list[WorkflowNode]:
     documents = workflow_nodes_collection.find(
