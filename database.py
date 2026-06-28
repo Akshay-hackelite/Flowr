@@ -8,7 +8,7 @@ load_dotenv()
 
 
 MONGO_URI = os.getenv("MONGO_URI")
-MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "botify")
+MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "flowr")
 
 
 client = MongoClient(MONGO_URI)
@@ -24,6 +24,7 @@ workflow_runs_collection = db["workflow_runs"]
 workflow_node_runs_collection = db["workflow_node_runs"]
 messages_collection = db["messages"]
 node_responses_collection = db["node_responses"]
+trigger_rules_collection = db["trigger_rules"]
 
 
 def init_db():

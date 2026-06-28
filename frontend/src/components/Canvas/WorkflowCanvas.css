@@ -1,0 +1,120 @@
+/* ── Workflow Canvas ── */
+
+.canvas-wrapper {
+  position: fixed;
+  top: var(--topbar-height);
+  left: var(--sidebar-width);
+  right: 0;
+  bottom: 0;
+  z-index: var(--z-canvas);
+  transition: right var(--transition-normal);
+}
+
+.canvas-wrapper--with-panel {
+  right: var(--config-panel-width);
+}
+
+/* React Flow overrides */
+.react-flow {
+  background: var(--bg-primary) !important;
+}
+
+/* Canvas background pattern */
+.react-flow__background {
+  opacity: 0.4;
+}
+
+/* Edge label styling */
+.react-flow__edge-textwrapper {
+  font-size: 0.7rem;
+}
+
+.react-flow__edge-text {
+  fill: var(--text-tertiary) !important;
+}
+
+/* Minimap */
+.react-flow__minimap {
+  background: var(--bg-secondary) !important;
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: var(--radius-md) !important;
+  bottom: 16px !important;
+  right: 16px !important;
+}
+
+/* Controls */
+.react-flow__controls {
+  bottom: 16px !important;
+  left: 16px !important;
+  box-shadow: var(--shadow-md) !important;
+  border-radius: var(--radius-md) !important;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle) !important;
+}
+
+.react-flow__controls-button {
+  background: var(--bg-secondary) !important;
+  border: none !important;
+  border-bottom: 1px solid var(--border-subtle) !important;
+  color: var(--text-secondary) !important;
+  width: 32px !important;
+  height: 32px !important;
+}
+
+.react-flow__controls-button:hover {
+  background: var(--bg-tertiary) !important;
+  color: var(--text-primary) !important;
+}
+
+.react-flow__controls-button svg {
+  fill: currentColor !important;
+}
+
+/* Selection box */
+.react-flow__selection {
+  background: var(--accent-primary-soft) !important;
+  border: 1px solid var(--accent-primary) !important;
+}
+
+/* Edge animation */
+.react-flow__edge.animated path {
+  stroke-dasharray: 5 !important;
+  animation: edgeFlow 0.8s linear infinite !important;
+}
+
+/* Panel */
+.react-flow__panel {
+  margin: 0 !important;
+}
+
+/* Canvas empty state */
+.canvas-empty-state {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  color: var(--text-muted);
+  pointer-events: none;
+  z-index: 5;
+}
+
+.canvas-empty-state__icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+  opacity: 0.5;
+}
+
+.canvas-empty-state__title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  margin-bottom: 8px;
+}
+
+.canvas-empty-state__desc {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  max-width: 300px;
+  line-height: 1.5;
+}

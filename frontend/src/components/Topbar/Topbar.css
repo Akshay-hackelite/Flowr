@@ -1,0 +1,202 @@
+/* ── Topbar ── */
+
+.topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--topbar-height);
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+  z-index: var(--z-topbar);
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  gap: 16px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.topbar__logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: opacity var(--transition-fast);
+  text-decoration: none;
+}
+
+.topbar__logo:hover {
+  opacity: 0.8;
+}
+
+.topbar__logo-icon {
+  width: 28px;
+  height: 28px;
+  background: var(--gradient-primary);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+}
+
+.topbar__divider {
+  width: 1px;
+  height: 24px;
+  background: var(--border-default);
+}
+
+.topbar__back-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  transition: all var(--transition-fast);
+}
+
+.topbar__back-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.topbar__workflow-name {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.topbar__workflow-name input {
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  width: 280px;
+  transition: all var(--transition-fast);
+}
+
+.topbar__workflow-name input:hover {
+  border-color: var(--border-default);
+}
+
+.topbar__workflow-name input:focus {
+  border-color: var(--accent-primary);
+  background: var(--bg-tertiary);
+}
+
+.topbar__status-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.topbar__status-badge--draft {
+  background: var(--bg-tertiary);
+  color: var(--text-tertiary);
+  border: 1px solid var(--border-default);
+}
+
+.topbar__status-badge--published {
+  background: var(--accent-green-soft);
+  color: var(--accent-green);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.topbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.topbar__btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 16px;
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+  font-weight: 500;
+  transition: all var(--transition-fast);
+}
+
+.topbar__btn--secondary {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-default);
+}
+
+.topbar__btn--secondary:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
+.topbar__btn--primary {
+  background: var(--gradient-primary);
+  color: white;
+  border: none;
+}
+
+.topbar__btn--primary:hover {
+  opacity: 0.9;
+  box-shadow: var(--shadow-glow-primary);
+}
+
+.topbar__btn--primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.topbar__btn--danger {
+  background: var(--accent-red-soft);
+  color: var(--accent-red);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.topbar__btn--danger:hover {
+  background: rgba(239, 68, 68, 0.2);
+}
+
+.topbar__btn--publish {
+  background: var(--accent-green-soft);
+  color: var(--accent-green);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.topbar__btn--publish:hover {
+  background: rgba(16, 185, 129, 0.2);
+}
+
+.topbar__save-status {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.topbar__save-status--saving {
+  color: var(--accent-amber);
+}
+
+.topbar__save-status--saved {
+  color: var(--accent-green);
+}
+
+.topbar__save-status--error {
+  color: var(--accent-red);
+}

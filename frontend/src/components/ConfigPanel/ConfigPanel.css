@@ -1,0 +1,283 @@
+/* ── Config Panel ── */
+
+.config-panel {
+  position: fixed;
+  right: 0;
+  top: var(--topbar-height);
+  bottom: 0;
+  width: var(--config-panel-width);
+  background: var(--bg-secondary);
+  border-left: 1px solid var(--border-subtle);
+  z-index: var(--z-panel);
+  display: flex;
+  flex-direction: column;
+  animation: slideInRight var(--transition-normal) ease-out;
+  overflow: hidden;
+}
+
+.config-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.config-panel__header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.config-panel__icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+}
+
+.config-panel__header-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.config-panel__header-type {
+  font-size: 0.7rem;
+  color: var(--text-tertiary);
+}
+
+.config-panel__close-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  transition: all var(--transition-fast);
+}
+
+.config-panel__close-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.config-panel__body {
+  flex: 1;
+  padding: 16px 18px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.config-panel__section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.config-panel__label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-tertiary);
+}
+
+.config-panel__input {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
+  transition: all var(--transition-fast);
+}
+
+.config-panel__input:focus {
+  border-color: var(--accent-primary);
+  background: var(--bg-elevated);
+  box-shadow: 0 0 0 3px var(--accent-primary-soft);
+}
+
+.config-panel__input::placeholder {
+  color: var(--text-muted);
+}
+
+.config-panel__textarea {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
+  resize: vertical;
+  min-height: 80px;
+  font-family: inherit;
+  transition: all var(--transition-fast);
+}
+
+.config-panel__textarea:focus {
+  border-color: var(--accent-primary);
+  background: var(--bg-elevated);
+  box-shadow: 0 0 0 3px var(--accent-primary-soft);
+}
+
+.config-panel__textarea::placeholder {
+  color: var(--text-muted);
+}
+
+.config-panel__select {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236a6a90' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 32px;
+}
+
+.config-panel__select:focus {
+  border-color: var(--accent-primary);
+}
+
+/* ── Option list ── */
+.config-panel__options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.config-panel__option-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  animation: fadeIn var(--transition-fast) ease-out;
+}
+
+.config-panel__option-item input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  padding: 2px 4px;
+}
+
+.config-panel__option-item input:focus {
+  outline: none;
+}
+
+.config-panel__option-drag {
+  color: var(--text-muted);
+  cursor: grab;
+  font-size: 12px;
+}
+
+.config-panel__option-delete {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  transition: all var(--transition-fast);
+}
+
+.config-panel__option-delete:hover {
+  background: var(--accent-red-soft);
+  color: var(--accent-red);
+}
+
+.config-panel__add-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: 1px dashed var(--border-default);
+  color: var(--text-tertiary);
+  font-size: 0.8rem;
+  transition: all var(--transition-fast);
+  width: 100%;
+}
+
+.config-panel__add-btn:hover {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+  background: var(--accent-primary-soft);
+}
+
+/* ── Condition rules ── */
+.config-panel__condition-rule {
+  padding: 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.config-panel__condition-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.config-panel__condition-row input,
+.config-panel__condition-row select {
+  flex: 1;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+}
+
+.config-panel__condition-row select {
+  max-width: 100px;
+}
+
+.config-panel__delete-node-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-red-soft);
+  color: var(--accent-red);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  font-size: 0.82rem;
+  font-weight: 500;
+  width: 100%;
+  transition: all var(--transition-fast);
+  margin-top: auto;
+}
+
+.config-panel__delete-node-btn:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.4);
+}

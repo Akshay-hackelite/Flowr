@@ -6,6 +6,8 @@ from pydantic import BaseModel, Field,ConfigDict,AliasChoices
 class Client(BaseModel):
     id: str
     name: str
+    password: Optional[str] = None
+    email: Optional[str] = None
     status: Literal["active", "inactive"] = "active"
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -16,6 +18,8 @@ class User(BaseModel):
     client_id: str
     name: str
     email: str
+    password: Optional[str] = None
+    auth_provider: str = "local"
     role: str = "admin"
     status: Literal["active", "inactive"] = "active"
     created_at: Optional[datetime] = None
@@ -71,6 +75,9 @@ class WorkflowNode(BaseModel):
 
     next_node_id: Optional[str] = None
     config: dict[str, Any] = Field(default_factory=dict)
+
+    # Canvas position — persisted so the layout is restored exactly on reload
+    position: Optional[dict] = None
 
     deleted: bool = False
 
@@ -173,7 +180,7 @@ class NodeResponse(BaseModel):
     node_id: str
     node_run_id: str
 
-    variable_name: str
+    variable_name: Optional[str] = None
     question: Optional[str] = None
     response: Any
 
@@ -197,19 +204,126 @@ class TestWebhookRequest(BaseModel):
 
 class SendMessageConfig(BaseModel):
     message: str
+    media_type: Literal["text", "image", "audio"] = "text"
+    media_url: Optional[str] = None
 
 class AskQuestionOptionConfig(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     id: Optional[str] = None
     label: str
-    value: str
 
     next_node_id: str = Field(
         validation_alias=AliasChoices("next_node_id", "nextNodeId"),
     )
 
+class AskQuestionListRowConfig(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: Optional[str] = None
+    label: str
+    description: Optional[str] = None
+
+    next_node_id: str = Field(
+        validation_alias=AliasChoices("next_node_id", "nextNodeId"),
+    )
+
+class AskQuestionListSectionConfig(BaseModel):
+    """
+    Section title
+    Row 1
+    Row 2
+    """
+    model_config = ConfigDict(populate_by_name=True)
+
+    title: str
+    rows: list[AskQuestionListRowConfig] = Field(default_factory=list)
+
+class AskQuestionListConfig(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    button_text: str = Field(
+        default="Choose option",
+        validation_alias=AliasChoices("button_text", "buttonText"),
+    )
+
+    sections: list[AskQuestionListSectionConfig] = Field(default_factory=list)
+
 class AskQuestionConfig(BaseModel):
+    """AskQuestionConfig
+    common:
+        question
+        input_type
+        variable_name
+
+    buttons only:
+        options
+
+    list only:
+        list_config
+            button_text
+            sections
+                rows
+                
+thus Button node config:
+
+{
+  "question": "What do you need help with?",
+  "input_type": "buttons",
+  "variable_name": "issue_type",
+  "options": [
+    {
+      "id": "track_order",
+      "label": "Track Order",
+      "next_node_id": "client:meta_test/workflow:support_bot/node:3"
+    },
+    {
+      "id": "return_item",
+      "label": "Return Item",
+      "next_node_id": "client:meta_test/workflow:support_bot/node:4"
+    }
+  ]
+}
+
+No list_config.
+
+
+For list, do this:
+
+{
+  "question": "What do you need help with?",
+  "input_type": "list",
+  "variable_name": "issue_type",
+  "list_config": {
+    "button_text": "Choose option",
+    "sections": [
+      {
+        "title": "Orders",
+        "rows": [
+          {
+            "id": "track_order",
+            "label": "Track Order",
+            "description": "Check your order status",
+            "next_node_id": "client:meta_test/workflow:support_bot/node:3"
+          }
+        ]
+      },
+      {
+        "title": "Returns",
+        "rows": [
+          {
+            "id": "return_item",
+            "label": "Return Item",
+            "description": "Start a return request",
+            "next_node_id": "client:meta_test/workflow:support_bot/node:4"
+          }
+        ]
+      }
+    ]
+  }
+}
+
+No options"""
     model_config = ConfigDict(populate_by_name=True)
 
     question: str
@@ -218,12 +332,20 @@ class AskQuestionConfig(BaseModel):
         default="text",
         validation_alias=AliasChoices("input_type", "inputType"),
     )
-
+    # Used only when input_type = "buttons"
     options: list[AskQuestionOptionConfig] = Field(default_factory=list)
 
-    variable_name: str = Field(
+    # Used only when input_type = "list"
+    list_config: Optional[AskQuestionListConfig] = Field(
+        default=None,
+        validation_alias=AliasChoices("list_config", "listConfig"),
+    )
+
+    variable_name: Optional[str] = Field(
+        default=None,
         validation_alias=AliasChoices("variable_name", "variableName"),
     )
+
 
 class ConditionRuleConfig(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -247,3 +369,59 @@ class ConditionConfig(BaseModel):
     )
 
 
+### the below are just for testing purposes
+class SendWhatsAppTestRequest(BaseModel):
+    phone_number_id: str
+    to_phone: str
+    text: str
+
+
+class SendWhatsAppButtonTestRequest(BaseModel):
+    phone_number_id: str
+    to_phone: str
+    text: str
+
+class SendWhatsAppListTestRequest(BaseModel):
+    phone_number_id: str
+    to_phone: str
+    body_text: str
+    list_config: dict
+
+
+class TriggerRule(BaseModel):
+    id: str
+    client_id: str
+    workflow_id: str
+    keyword: str
+    match_type: Literal["exact", "contains"] = "contains"
+    is_active: bool = True
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class SignupRequest(BaseModel):
+    client_name: str
+    user_name: str
+    email: str
+    password: str
+    phone_number_id: Optional[str] = None
+    whatsapp_business_account_id: Optional[str] = None
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class GoogleAuthRequest(BaseModel):
+    email: str
+    name: str
+    client_name: str
+    phone_number_id: Optional[str] = None
+    whatsapp_business_account_id: Optional[str] = None
+
+
+class SendMessageReplyRequest(BaseModel):
+    client_id: str
+    contact_phone: str
+    text: str

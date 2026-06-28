@@ -16,6 +16,7 @@ from models import (
     SendMessageConfig,
     AskQuestionConfig,
     ConditionConfig,
+    AskQuestionListConfig
 )
 from storage import (
     save_client,
@@ -37,8 +38,19 @@ from storage import (
     get_run_node_responses,
     get_workflow_run_by_id,
     get_workflow_node_runs_by_run_id,
+    update_message_after_send,
+    get_whatsapp_account_by_id,
+    update_message_status_by_meta_message_id,
+    get_whatsapp_account_for_client,
+    get_active_trigger_rules,
 )
-
+from whatsapp_service import (
+    send_whatsapp_text_message,
+    send_whatsapp_button_message,
+    send_whatsapp_list_message,
+    send_whatsapp_image_message,
+    send_whatsapp_audio_message,
+)
 
 def now_utc():
     return datetime.now(timezone.utc)
@@ -72,30 +84,62 @@ def get_variable_name_from_node(node: WorkflowNode) -> str | None:
 
     return None
 
-def get_option_metadata(options):
+def get_button_option_metadata(options):
     return [
         option.model_dump(mode="python")
         for option in options
     ]
 
-def get_option_display_labels(options): #This returns full option objects into option labels:
+def get_list_config_metadata(list_config: AskQuestionListConfig | None):
+    if not list_config:
+        return None
+
+    return list_config.model_dump(
+        mode="python",
+        exclude_none=True,
+    )
+
+def get_option_display_labels(options): 
+    #This returns full option objects into option labels. both for buttons or list config
     return [option.label for option in options]
 
-def find_selected_option( #The user replied with some text of some question node then Which option did they select?
+
+def get_ask_question_choices(config: AskQuestionConfig):
+    """This function will help in fetching all options(in case of buttons) or all rows of all sections(in case of list. Why all rows only? no section titles? it is becaues for matching user selected text , we only need rows becuase only it has label and id) , of ask question node. """
+    if config.input_type == "buttons":
+        return config.options
+
+    if config.input_type == "list" and config.list_config:
+        choices = []
+
+        for section in config.list_config.sections:
+            choices.extend(section.rows)
+
+        return choices
+
+    return []
+
+def find_selected_option(
     config: AskQuestionConfig,
     user_text: str,
 ):
-    for option in config.options:
-        possible_matches = {
-            option.label,
-            option.value,
-        }
+    choices = get_ask_question_choices(config)
 
-        if option.id:
-            possible_matches.add(option.id)
+    cleaned_user_text = user_text.strip()
+    normalized_user_text = cleaned_user_text.lower()
 
-        if user_text in possible_matches:
-            return option
+    for choice in choices:
+        # 1. Exact id match.
+        # This handles real WhatsApp button/list clicks.
+        if choice.id and cleaned_user_text == choice.id:
+            return choice
+
+        # 2. Case-insensitive label match.
+        # This handles manual typing like "track order".
+        normalized_label = choice.label.strip().lower()
+
+        if normalized_user_text == normalized_label:
+            return choice
 
     return None
 
@@ -123,7 +167,6 @@ Here node.config is a normal dict, and model_validate() checks it against the se
         {
             "id": "track_order",
             "label": "Track Order",
-            "value": "Track Order",
             "next_node_id": "node:3",
         }
     ],
@@ -140,27 +183,8 @@ This one line does two things:
 1. Checks if raw_config is valid AskQuestionConfig data.
 2. Returns an AskQuestionConfig object.'''
 
-def validate_full_setup(setup: FullSetupRequest):
+def validate_workflow_graph(workflow: Workflow, nodes: list[WorkflowNode]) -> list[Any]:
     errors = []
-
-    client = setup.client
-    user = setup.user
-    account = setup.whatsapp_account
-    workflow = setup.workflow
-    nodes = setup.nodes
-
-    if user.client_id != client.id:
-        errors.append("user.client_id must match client.id.")
-
-    if account.client_id != client.id:
-        errors.append("whatsapp_account.client_id must match client.id.")
-
-    if workflow.client_id != client.id:
-        errors.append("workflow.client_id must match client.id.")
-
-    if workflow.whatsapp_account_id != account.id:
-        errors.append("workflow.whatsapp_account_id must match whatsapp_account.id.")
-
     node_ids = [node.id for node in nodes]
     node_id_set = set(node_ids)
 
@@ -169,115 +193,115 @@ def validate_full_setup(setup: FullSetupRequest):
 
     if not workflow.first_node_id:
         errors.append("workflow.first_node_id is required.")
-
     elif workflow.first_node_id not in node_id_set:
         errors.append("workflow.first_node_id must exist in nodes.")
 
     for node in nodes:
-        if node.client_id != client.id:
-            errors.append(f"node '{node.id}' has wrong client_id.")
-
-        if node.workflow_id != workflow.id:
-            errors.append(f"node '{node.id}' has wrong workflow_id.")
-
         if node.next_node_id and node.next_node_id not in node_id_set:
-            errors.append(
-                f"node '{node.id}' has invalid next_node_id '{node.next_node_id}'."
-            )
-
-        # ----------------------------
-        # Config validation
-        # ----------------------------
+            errors.append(f"node '{node.id}' has invalid next_node_id '{node.next_node_id}'.")
 
         try:
             config = parse_node_config(node)
-
-        except ValidationError as error:
-            errors.append(
-                {
-                    "node_id": node.id,
-                    "node_type": node.type,
-                    "message": "Invalid node config.",
-                    "errors": error.errors(),
-                }
-            )
+        except (ValidationError, ValueError) as error:
+            errors.append({"node_id": node.id, "node_type": node.type, "message": str(error)})
             continue
-
-        except ValueError as error:
-            errors.append(
-                {
-                    "node_id": node.id,
-                    "node_type": node.type,
-                    "message": str(error),
-                }
-            )
-            continue
-
-        # ----------------------------
-        # Extra graph validation using parsed config
-        # ----------------------------
 
         if isinstance(config, AskQuestionConfig):
-            if config.input_type in ["buttons", "list"]:
+            if not config.variable_name or not config.variable_name.strip():
+                errors.append(f"ask_question node '{node.id}' is missing a variable name.")
+
+            if config.input_type == "buttons":
+                if config.list_config:
+                    errors.append(f"ask_question node '{node.id}' uses buttons but has list_config.")
                 if not config.options:
-                    errors.append(
-                        f"ask_question node '{node.id}' uses {config.input_type} but has no options."
-                    )
+                    errors.append(f"ask_question node '{node.id}' uses buttons but has no options.")
+                if len(config.options) > 3:
+                    errors.append(f"ask_question node '{node.id}' uses buttons but has more than 3 options.")
 
                 option_labels = [option.label for option in config.options]
-                option_values = [option.value for option in config.options]
-                option_ids = [
-                    option.id
-                    for option in config.options
-                    if option.id
-                ]
-
+                option_ids = [option.id for option in config.options if option.id]
                 if len(option_labels) != len(set(option_labels)):
-                    errors.append(
-                        f"ask_question node '{node.id}' has duplicate option labels."
-                    )
-
-                if len(option_values) != len(set(option_values)):
-                    errors.append(
-                        f"ask_question node '{node.id}' has duplicate option values."
-                    )
-
+                    errors.append(f"ask_question node '{node.id}' has duplicate button labels.")
                 if len(option_ids) != len(set(option_ids)):
-                    errors.append(
-                        f"ask_question node '{node.id}' has duplicate option ids."
-                    )
+                    errors.append(f"ask_question node '{node.id}' has duplicate button ids.")
 
                 for index, option in enumerate(config.options):
-                    if option.next_node_id not in node_id_set:
-                        errors.append(
-                            f"ask_question node '{node.id}' option {index + 1} has invalid next_node_id."
-                        )
+                    if not option.id:
+                        errors.append(f"ask_question node '{node.id}' button option {index + 1} is missing id.")
+                    if option.next_node_id and option.next_node_id not in node_id_set:
+                        errors.append(f"ask_question node '{node.id}' button option {index + 1} points to non-existent node.")
 
+            elif config.input_type == "list":
+                if config.options:
+                    errors.append(f"ask_question node '{node.id}' uses list but has options.")
+                if not config.list_config:
+                    errors.append(f"ask_question node '{node.id}' uses list but has no list_config.")
+                else:
+                    if not config.list_config.button_text:
+                        errors.append(f"ask_question node '{node.id}' uses list but missing button_text.")
+                    if not config.list_config.sections:
+                        errors.append(f"ask_question node '{node.id}' uses list but has no sections.")
+                    all_rows = []
+                    for section in config.list_config.sections:
+                        if not section.rows:
+                            errors.append(f"ask_question node '{node.id}' list section '{section.title}' has no rows.")
+                        all_rows.extend(section.rows)
+                    if len(all_rows) > 10:
+                        errors.append(f"ask_question node '{node.id}' uses list but has more than 10 total rows.")
+                    row_labels = [row.label for row in all_rows]
+                    row_ids = [row.id for row in all_rows if row.id]
+                    if len(row_labels) != len(set(row_labels)):
+                        errors.append(f"ask_question node '{node.id}' has duplicate list row labels.")
+                    if len(row_ids) != len(set(row_ids)):
+                        errors.append(f"ask_question node '{node.id}' has duplicate list row ids.")
+                    for index, row in enumerate(all_rows):
+                        if not row.id:
+                            errors.append(f"ask_question node '{node.id}' list row {index + 1} is missing id.")
+                        if row.next_node_id and row.next_node_id not in node_id_set:
+                            errors.append(f"ask_question node '{node.id}' list row {index + 1} points to non-existent node.")
             else:
+                if config.options:
+                    errors.append(f"text ask_question node '{node.id}' should not have options.")
+                if config.list_config:
+                    errors.append(f"text ask_question node '{node.id}' should not have list_config.")
                 if node.next_node_id and node.next_node_id not in node_id_set:
-                    errors.append(
-                        f"text ask_question node '{node.id}' has invalid next_node_id '{node.next_node_id}'."
-                    )
+                    errors.append(f"text ask_question node '{node.id}' points to non-existent node.")
 
         elif isinstance(config, ConditionConfig):
             if not config.conditions and not config.default_next_node_id:
-                errors.append(
-                    f"condition node '{node.id}' needs conditions or default_next_node_id."
-                )
-
+                errors.append(f"condition node '{node.id}' needs conditions or default_next_node_id.")
             for index, condition in enumerate(config.conditions):
-                if condition.next_node_id not in node_id_set:
-                    errors.append(
-                        f"condition node '{node.id}' rule {index + 1} has invalid next_node_id."
-                    )
+                if condition.next_node_id and condition.next_node_id not in node_id_set:
+                    errors.append(f"condition node '{node.id}' rule {index + 1} points to non-existent node.")
+            if config.default_next_node_id and config.default_next_node_id not in node_id_set:
+                errors.append(f"condition node '{node.id}' points to non-existent default node.")
 
-            if (
-                config.default_next_node_id
-                and config.default_next_node_id not in node_id_set
-            ):
-                errors.append(
-                    f"condition node '{node.id}' has invalid default_next_node_id."
-                )
+    return errors
+
+def validate_full_setup(setup: FullSetupRequest):
+    errors = []
+    client = setup.client
+    user = setup.user
+    account = setup.whatsapp_account
+    workflow = setup.workflow
+    nodes = setup.nodes
+
+    if user.client_id != client.id:
+        errors.append("user.client_id must match client.id.")
+    if account.client_id != client.id:
+        errors.append("whatsapp_account.client_id must match client.id.")
+    if workflow.client_id != client.id:
+        errors.append("workflow.client_id must match client.id.")
+    if workflow.whatsapp_account_id != account.id:
+        errors.append("workflow.whatsapp_account_id must match whatsapp_account.id.")
+
+    for node in nodes:
+        if node.client_id != client.id:
+            errors.append(f"node '{node.id}' has wrong client_id.")
+        if node.workflow_id != workflow.id:
+            errors.append(f"node '{node.id}' has wrong workflow_id.")
+
+    errors.extend(validate_workflow_graph(workflow, nodes))
 
     if errors:
         raise HTTPException(
@@ -331,10 +355,14 @@ def save_full_setup(setup: FullSetupRequest): # in routes , it will come as Full
 
 
 def build_node_map(nodes: list[WorkflowNode]) -> dict[str, WorkflowNode]:
-    return {
-        node.id: node
-        for node in nodes
-    }
+    res = {}
+    for node in nodes:
+        res[node.id] = node
+        if ":" in node.id:
+            res[node.id.split(":")[-1]] = node
+        if "/" in node.id:
+            res[node.id.split("/")[-1]] = node
+    return res
 
 
 def create_outgoing_message(
@@ -392,6 +420,175 @@ def create_incoming_message(
 
     return message
 
+def resolve_variables(text: str, run: WorkflowRun) -> str:
+    if not text:
+        return ""
+    res = text
+    vars_dict = {
+        "contact_phone": run.contact_phone,
+        **(run.variables or {}),
+    }
+    for k, v in vars_dict.items():
+        res = res.replace(f"@{k}", str(v)).replace(f"{{{{{k}}}}}", str(v))
+    return res
+
+
+def send_outgoing_message_to_whatsapp(
+    run: WorkflowRun,
+    message: MessageRecord,
+):
+    if message.direction != "outgoing":
+        return
+
+    if message.message_type not in ["text", "interactive_buttons", "interactive_list", "image", "audio"]:
+        return
+
+    account = get_whatsapp_account_by_id(run.whatsapp_account_id)
+
+    if not account:
+        message.status = "failed"
+        message.metadata["send_error"] = "WhatsApp account not found for sending."
+
+        update_message_after_send(
+            message_id=message.id,
+            status=message.status,
+            metadata=message.metadata,
+        )
+        return
+
+    try:
+        if message.message_type == "text":
+            meta_response = send_whatsapp_text_message(
+                phone_number_id=account.phone_number_id,
+                to_phone=run.contact_phone,
+                text=message.text or "",
+            )
+
+        elif message.message_type == "interactive_buttons":
+            option_metadata = message.metadata.get("options", [])
+
+            buttons = []
+
+            for option in option_metadata:
+                buttons.append(
+                    {
+                        "id": option["id"],
+                        "title": option["label"],
+                    }
+                )
+
+            meta_response = send_whatsapp_button_message(
+                phone_number_id=account.phone_number_id,
+                to_phone=run.contact_phone,
+                body_text=message.text or "",
+                buttons=buttons,
+            )
+        elif message.message_type == "interactive_list":
+            list_config = message.metadata.get("list_config") or {}
+
+            meta_response = send_whatsapp_list_message(
+                phone_number_id=account.phone_number_id,
+                to_phone=run.contact_phone,
+                body_text=message.text or "",
+                list_config=list_config,
+            )
+        elif message.message_type == "image":
+            image_url = message.metadata.get("media_url")
+            if not image_url:
+                return
+            meta_response = send_whatsapp_image_message(
+                phone_number_id=account.phone_number_id,
+                to_phone=run.contact_phone,
+                image_url=image_url,
+                caption=message.text or None,
+            )
+        elif message.message_type == "audio":
+            audio_url = message.metadata.get("media_url")
+            if not audio_url:
+                return
+            meta_response = send_whatsapp_audio_message(
+                phone_number_id=account.phone_number_id,
+                to_phone=run.contact_phone,
+                audio_url=audio_url,
+            )
+        else:
+            return
+
+        message.metadata["meta_response"] = meta_response
+
+        meta_messages = meta_response.get("messages", [])
+
+        if meta_messages:
+            message.metadata["meta_message_id"] = meta_messages[0].get("id")
+
+        message.status = "sent"
+
+    except HTTPException as error:
+        message.metadata["send_error"] = error.detail
+        message.status = "failed"
+
+    update_message_after_send(
+        message_id=message.id,
+        status=message.status,
+        metadata=message.metadata,
+    )
+
+def get_send_failure_reason(message: MessageRecord) -> str:
+    send_error = message.metadata.get("send_error")
+
+    if isinstance(send_error, dict):
+        return (
+            send_error.get("message")
+            or send_error.get("detail")
+            or str(send_error)
+        )
+
+    if send_error:
+        return str(send_error)
+
+    return "Outgoing WhatsApp message failed to send."
+
+
+def fail_workflow_after_send_failure(
+    run: WorkflowRun,
+    node_run: WorkflowNodeRun,
+    message: MessageRecord,
+    responses: list[dict[str, Any]],
+):
+    error_message = get_send_failure_reason(message)
+
+    node_run.status = "failed"
+    node_run.error = error_message
+    node_run.completed_at = now_utc()
+    save_workflow_node_run(node_run)
+
+    run.status = "failed"
+    run.current_node_id = node_run.node_id
+    run.waiting_at_node_id = None
+    run.waiting_node_run_id = None
+    run.completed_at = now_utc()
+    save_workflow_run(run)
+
+    responses.append(
+        {
+            "type": message.message_type,
+            "text": message.text,
+            "status": "failed",
+            "message_id": message.id,
+            "send_error": message.metadata.get("send_error"),
+        }
+    )
+
+    return {
+        "status": "failed",
+        "workflow_run_id": run.id,
+        "failed_at_node_id": node_run.node_id,
+        "failed_node_run_id": node_run.id,
+        "failed_message_id": message.id,
+        "error": error_message,
+        "messages": responses,
+        "variables": run.variables,
+    }
 
 def evaluate_condition_node(
     node: WorkflowNode,
@@ -475,7 +672,12 @@ def execute_workflow_from_node(
                     detail=f"Invalid config for send_message node '{node.id}'.",
                 )
 
-            message_text = config.message
+            message_text = resolve_variables(config.message, run)
+            media_type = getattr(config, "media_type", "text") or "text"
+            media_url = getattr(config, "media_url", None)
+            metadata = {}
+            if media_type in ["image", "audio"] and media_url:
+                metadata["media_url"] = media_url
 
             node_run.status = "success"
             node_run.completed_at = now_utc()
@@ -485,12 +687,25 @@ def execute_workflow_from_node(
                 run=run,
                 node_run=node_run,
                 text=message_text,
-                message_type="text",
+                message_type=media_type,
+                metadata=metadata,
             )
+            send_outgoing_message_to_whatsapp(
+                run=run,
+                message=message,
+            )
+        
+            if message.status == "failed":
+                return fail_workflow_after_send_failure(
+                    run=run,
+                    node_run=node_run,
+                    message=message,
+                    responses=responses,
+                )
 
             responses.append(
                 {
-                    "type": "text",
+                    "type": media_type,
                     "text": message.text,
                 }
             )
@@ -508,53 +723,117 @@ def execute_workflow_from_node(
                     detail=f"Invalid config for ask_question node '{node.id}'.",
                 )
 
-            question = config.question
+            question = resolve_variables(config.question, run)
             input_type = config.input_type
-            options = config.options
             variable_name = config.variable_name
-            option_labels = get_option_display_labels(options)
-            option_metadata = get_option_metadata(options)
-
-            node_run.status = "waiting_for_user"
-            node_run.completed_at = None
-            save_workflow_node_run(node_run)
-
-            message_type = "text"
-
+            
+            # ---------------------------------------
+            # 1. Decide message type and metadata
+            # ---------------------------------------
             if input_type == "buttons":
-                message_type = "buttons"
+                message_type = "interactive_buttons"
 
-            if input_type == "list":
-                message_type = "list"
+                message_metadata = {
+                    "input_type": input_type,
+                    "options": get_button_option_metadata(config.options),
+                    "store_answer_in": variable_name,
+                }
+
+            elif input_type == "list":
+                message_type = "interactive_list"
+
+                message_metadata = {
+                    "input_type": input_type,
+                    "list_config": get_list_config_metadata(config.list_config),
+                    "store_answer_in": variable_name,
+                }
+
+            else:
+                message_type = "text"
+
+                message_metadata = {
+                    "input_type": input_type,
+                    "store_answer_in": variable_name,
+                }
+
+            # ---------------------------------------
+            # 2. Create outgoing message record
+            # ---------------------------------------
 
             message = create_outgoing_message(
                 run=run,
                 node_run=node_run,
                 text=question,
                 message_type=message_type,
-                metadata={
-                    "input_type": input_type,
-                    "options": option_metadata,
-                    "store_answer_in": variable_name,
-                },
+                metadata=message_metadata,
             )
+            # ---------------------------------------
+            # 3. Send the message to WhatsApp
+            # ---------------------------------------
+            send_outgoing_message_to_whatsapp(
+                run=run,
+                message=message,
+            )
+            """the message that we created above is very useful both for our db and also we will use this message to send the node buttons or list to user.outgoing message already has:
 
-            responses.append(
-                {
-                    "type": "question",
-                    "question": message.text,
-                    "input_type": input_type,
-                    "options": option_labels,
-                    "option_details": option_metadata,
-                    "store_answer_in": variable_name,
-                }
-            )
+                message.text
+                message.message_type
+                message.metadata.options
+                message.contact_phone
+
+
+                The sender should simply ask:
+
+                What message do I need to send?
+                To whom?
+                Through which WhatsApp account?
+                With what options/buttons?
+
+                That data is inside the MessageRecord i.e the message we need to send."""
+
+            if message.status == "failed":
+                return fail_workflow_after_send_failure(
+                    run=run,
+                    node_run=node_run,
+                    message=message,
+                    responses=responses,
+                )
+            # ---------------------------------------
+            # 4. Now mark node/run as waiting
+            # ---------------------------------------
+
+            node_run.status = "waiting_for_user"
+            node_run.completed_at = None
+            save_workflow_node_run(node_run)
 
             run.status = "waiting_for_user"
             run.current_node_id = node.id
             run.waiting_at_node_id = node.id
             run.waiting_node_run_id = node_run.id
             save_workflow_run(run)
+
+            # ---------------------------------------
+            # 5. Build API response based on input type
+            # ---------------------------------------
+
+            question_response = {
+                "type": "question",
+                "question": message.text,
+                "input_type": input_type,
+                "store_answer_in": variable_name,
+            }
+
+            if input_type == "buttons":
+                question_response["options"] = get_option_display_labels(config.options)
+                question_response["option_details"] = message_metadata["options"]
+
+            elif input_type == "list":
+                question_response["options"] = get_option_display_labels(
+                    get_ask_question_choices(config)
+                )
+                question_response["list_config"] = message_metadata["list_config"]
+
+            responses.append(question_response)
 
             return {
                 "status": "waiting_for_user",
@@ -645,27 +924,29 @@ def continue_existing_run(
             detail="Waiting node config is not valid for ask_question.",
         )
 
-    selected_value = user_text
     selected_label = user_text
     selected_next_node_id = waiting_node.next_node_id
 
-    if config.input_type in ["buttons", "list"]: #currently if user didnt selected from the given buttons or list , it will throw error.
+    if config.input_type in ["buttons", "list"]: 
         selected_option = find_selected_option(
             config=config,
             user_text=user_text,
         )
 
-        if not selected_option:
-            allowed_options = get_option_display_labels(config.options)
-
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid option. Allowed options are: {allowed_options}",
-            )
-
-        selected_value = selected_option.value
-        selected_label = selected_option.label
-        selected_next_node_id = selected_option.next_node_id
+        if selected_option:
+            selected_label = selected_option.label
+            selected_next_node_id = selected_option.next_node_id
+        else:
+            # User typed an invalid or custom option:
+            # Route to default fallback handle if configured (stored in next_node_id or default_next_node_id)
+            selected_label = user_text
+            # Check if there is a default fallback handle configured on node or config
+            default_fallback = None
+            if hasattr(config, "default_next_node_id") and getattr(config, "default_next_node_id", None):
+                default_fallback = config.default_next_node_id
+            elif isinstance(waiting_node.config, dict):
+                default_fallback = waiting_node.config.get("default_next_node_id")
+            selected_next_node_id = default_fallback or waiting_node.next_node_id
 
     incoming_message = create_incoming_message(
         client_id=run.client_id,
@@ -683,8 +964,7 @@ def continue_existing_run(
     waiting_node_run.status = "success"
     waiting_node_run.user_input = {
         "variable_name": variable_name,
-        "value": selected_value,
-        "label": selected_label,
+        "value": selected_label,
         "raw_text": user_text,
         "message_id": incoming_message.id,
         "received_at": now_utc(),
@@ -703,11 +983,12 @@ def continue_existing_run(
         node_run_id=waiting_node_run.id,
         variable_name=variable_name,
         question=config.question,
-        response=selected_value,
+        response=selected_label,
     )
     save_node_response(response)
 
-    run.variables[variable_name] = selected_value
+    if variable_name and variable_name.strip():
+        run.variables[variable_name.strip()] = selected_label
     run.status = "active"
     run.waiting_at_node_id = None
     run.waiting_node_run_id = None
@@ -736,7 +1017,7 @@ def start_new_run(
         contact_phone=contact_phone,
         status="active",
         current_node_id=workflow.first_node_id,
-        variables={},
+        variables={"last_message": first_message_text or ""},
         started_at=now_utc(),
     )
 
@@ -785,41 +1066,84 @@ def process_incoming_message(
     )
 
     if active_run:
-        result = continue_existing_run(
-            run=active_run,
-            user_text=text,
-            message_type=message_type,
+        if active_run.status == "waiting_for_user":
+            result = continue_existing_run(
+                run=active_run,
+                user_text=text,
+                message_type=message_type,
+            )
+
+            return {
+                "mode": "continued_existing_workflow_run",
+                "source": source,
+                "from_phone": from_phone,
+                "phone_number_id": phone_number_id,
+                **result,
+            }
+        else:
+            # run exists, but bot is not waiting for user(i.e if user sends messages before we ask any question)
+            # so do NOT continue and do NOT start a new run , instead just ignore the message
+            incoming_message = create_incoming_message(
+                client_id=active_run.client_id,
+                whatsapp_account_id=active_run.whatsapp_account_id,
+                workflow_id=active_run.workflow_id,
+                workflow_run_id=active_run.id,
+                node_run_id=None,
+                contact_phone=active_run.contact_phone,
+                text=text,
+                message_type=message_type,
+                )
+
+            return {
+                "mode": "ignored_user_message",
+                "source": source,
+                "from_phone": from_phone,
+                "phone_number_id": phone_number_id,
+                "workflow_run_id": active_run.id,
+                "run_status": active_run.status,
+                "message_id": incoming_message.id,
+                "reason": "Workflow run is active but not waiting for user input.",
+            }
+
+
+    active_rules = get_active_trigger_rules(account.client_id)
+    matched_workflow = None
+    for rule in active_rules:
+        if rule.match_type == "exact" and text.strip().lower() == rule.keyword.strip().lower():
+            wf = get_workflow_by_id(rule.workflow_id)
+            if wf and wf.status == "published" and not wf.deleted:
+                matched_workflow = wf
+                break
+        elif rule.match_type == "contains" and rule.keyword.strip().lower() in text.strip().lower():
+            wf = get_workflow_by_id(rule.workflow_id)
+            if wf and wf.status == "published" and not wf.deleted:
+                matched_workflow = wf
+                break
+
+    if matched_workflow:
+        workflow = matched_workflow
+    else:
+        published_workflows = get_published_workflows_for_account(
+            client_id=account.client_id,
+            whatsapp_account_id=account.id,
         )
 
-        return {
-            "mode": "continued_existing_workflow_run",
-            "source": source,
-            "from_phone": from_phone,
-            "phone_number_id": phone_number_id,
-            **result,
-        }
+        if not published_workflows:
+            raise HTTPException(
+                status_code=404,
+                detail="No published workflow found for this WhatsApp account.",
+            )
 
-    published_workflows = get_published_workflows_for_account(
-        client_id=account.client_id,
-        whatsapp_account_id=account.id,
-    )
+        if len(published_workflows) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Multiple published workflows found for this WhatsApp account. "
+                    "For now, keep only one workflow published."
+                ),
+            )
 
-    if not published_workflows:
-        raise HTTPException(
-            status_code=404,
-            detail="No published workflow found for this WhatsApp account.",
-        )
-
-    if len(published_workflows) > 1:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Multiple published workflows found for this WhatsApp account. "
-                "For now, keep only one workflow published."
-            ),
-        )
-
-    workflow = published_workflows[0]
+        workflow = published_workflows[0]
 
     result = start_new_run(
         workflow=workflow,
@@ -917,12 +1241,12 @@ def extract_whatsapp_message(payload: dict[str, Any]) -> dict[str, Any] | None:
 
             if interactive_type == "button_reply":
                 button_reply = interactive.get("button_reply", {})
-                text = button_reply.get("id") or button_reply.get("title") or ""
+                text = button_reply.get("title") or button_reply.get("id") or ""
                 message_type = "button_reply"
 
             elif interactive_type == "list_reply":
                 list_reply = interactive.get("list_reply", {})
-                text = list_reply.get("id") or list_reply.get("title") or ""
+                text = list_reply.get("title") or list_reply.get("id") or ""
                 message_type = "list_reply"
 
             else:
@@ -942,26 +1266,144 @@ def extract_whatsapp_message(payload: dict[str, Any]) -> dict[str, Any] | None:
     except (KeyError, IndexError, TypeError):
         return None
 
+def process_status_update_webhook(payload: dict[str, Any]):
+    try:
+        entry = payload["entry"][0]
+        change = entry["changes"][0]
+        value = change["value"]
 
-def process_whatsapp_webhook_payload(payload: dict[str, Any]):
-    extracted = extract_whatsapp_message(payload)
-
-    if not extracted:
+    except (KeyError, IndexError, TypeError):
         return {
             "ignored": True,
-            "reason": "No supported incoming message found in webhook payload.",
+            "reason": "Invalid WhatsApp webhook payload structure.",
         }
 
-    if not extracted["text"]:
+    statuses = value.get("statuses", [])
+
+    if not statuses:
         return {
             "ignored": True,
-            "reason": f"Unsupported or empty message type: {extracted['message_type']}",
+            "reason": "No statuses found in webhook payload.",
         }
 
-    return process_incoming_message(
-        phone_number_id=extracted["phone_number_id"],
-        from_phone=extracted["from_phone"],
-        text=extracted["text"],
-        message_type=extracted["message_type"],
-        source="whatsapp_webhook",
+    results = []
+
+    for status_event in statuses:
+        meta_message_id = status_event.get("id")
+        delivery_status = status_event.get("status")
+
+        if not meta_message_id or not delivery_status:
+            results.append(
+                {
+                    "updated": False,
+                    "reason": "Status event missing id or status.",
+                    "status_event": status_event,
+                }
+            )
+            continue
+
+        db_result = update_message_status_by_meta_message_id(
+            meta_message_id=meta_message_id,
+            status=delivery_status,
+            status_payload=status_event,
+        )
+
+        results.append(
+            {
+                "updated": db_result["matched_count"] > 0,
+                "applied_to_main_status": db_result.get("applied", False),
+                "meta_message_id": meta_message_id,
+                "incoming_status": delivery_status,
+                "previous_status": db_result.get("previous_status"),
+                "status": db_result.get("final_status"),
+                "matched_count": db_result["matched_count"],
+                "modified_count": db_result["modified_count"],
+                "reason": db_result.get("reason"),
+            }
+        )
+
+    return {
+        "mode": "status_update",
+        "processed": len(statuses),
+        "results": results,
+    }
+
+def route_whatsapp_webhook_payload(payload: dict[str, Any]):
+    try:
+        entry = payload["entry"][0]
+        change = entry["changes"][0]
+        value = change["value"]
+
+    except (KeyError, IndexError, TypeError):
+        return {
+            "ignored": True,
+            "reason": "Invalid WhatsApp webhook payload structure.",
+        }
+    if value.get("messages"): # if the webhook contains message i.e it is the webhook which was fired becuase user sent a message to our bot
+        extracted = extract_whatsapp_message(payload)
+
+        if not extracted:
+            return {
+                "ignored": True,
+                "reason": "No supported incoming message found in webhook payload.",
+            }
+
+        if not extracted["text"]:
+            return {
+                "ignored": True,
+                "reason": f"Unsupported or empty message type: {extracted['message_type']}",
+            }
+
+        return process_incoming_message(
+            phone_number_id=extracted["phone_number_id"],
+            from_phone=extracted["from_phone"],
+            text=extracted["text"],
+            message_type=extracted["message_type"],
+            source="whatsapp_webhook",
+        )
+    if value.get("statuses"): # if the webhook contains status i.e. it is the webhook that was fired because the message we sent to user , now it is either sent or delivered or read. thus this webhook just informs us about the updated status of our sent msg.
+        return process_status_update_webhook(payload)
+
+    return {
+        "ignored": True,
+        "reason": "Webhook payload did not contain messages or statuses.",
+    }
+
+
+def send_human_reply_message(client_id: str, contact_phone: str, text: str) -> MessageRecord:
+    account = get_whatsapp_account_for_client(client_id)
+    account_id = account.id if account else "test_account_id"
+
+    message = MessageRecord(
+        id=make_message_id(),
+        client_id=client_id,
+        whatsapp_account_id=account_id,
+        workflow_id="human_handoff",
+        workflow_run_id="human_handoff",
+        node_run_id=None,
+        contact_phone=contact_phone,
+        direction="outgoing",
+        message_type="text",
+        text=text,
+        metadata={"human_handoff": True},
+        status="sent",
     )
+    save_message(message)
+
+    if account and os.getenv("WHATSAPP_ACCESS_TOKEN"):
+        try:
+            meta_response = send_whatsapp_text_message(
+                phone_number_id=account.phone_number_id,
+                to_phone=contact_phone,
+                text=text,
+            )
+            message.metadata["meta_response"] = meta_response
+            meta_messages = meta_response.get("messages", [])
+            if meta_messages:
+                message.metadata["meta_message_id"] = meta_messages[0].get("id")
+            update_message_after_send(message.id, "sent", message.metadata)
+        except Exception as e:
+            message.metadata["send_error"] = str(e)
+            update_message_after_send(message.id, "failed", message.metadata)
+
+    return message
