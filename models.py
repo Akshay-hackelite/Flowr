@@ -213,7 +213,8 @@ class AskQuestionOptionConfig(BaseModel):
     id: Optional[str] = None
     label: str
 
-    next_node_id: str = Field(
+    next_node_id: Optional[str] = Field(
+        default=None,
         validation_alias=AliasChoices("next_node_id", "nextNodeId"),
     )
 
@@ -224,7 +225,8 @@ class AskQuestionListRowConfig(BaseModel):
     label: str
     description: Optional[str] = None
 
-    next_node_id: str = Field(
+    next_node_id: Optional[str] = Field(
+        default=None,
         validation_alias=AliasChoices("next_node_id", "nextNodeId"),
     )
 
@@ -354,7 +356,8 @@ class ConditionRuleConfig(BaseModel):
     operator: Literal["equals", "not_equals"] = "equals"
     value: Any
 
-    next_node_id: str = Field(
+    next_node_id: Optional[str] = Field(
+        default=None,
         validation_alias=AliasChoices("next_node_id", "nextNodeId"),
     )
 
