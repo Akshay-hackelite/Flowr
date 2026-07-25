@@ -193,7 +193,6 @@ export function backendToReactFlow(workflow, backendNodes) {
               targetHandle: 'target',
               type: 'deletable',
               animated: true,
-              label: opt.label,
               style: { stroke: '#4ecdc4', strokeWidth: 2 },
             });
           }
@@ -213,7 +212,6 @@ export function backendToReactFlow(workflow, backendNodes) {
                 targetHandle: 'target',
                 type: 'deletable',
                 animated: true,
-                label: row.label,
                 style: { stroke: '#4ecdc4', strokeWidth: 2 },
               });
             }
@@ -230,7 +228,6 @@ export function backendToReactFlow(workflow, backendNodes) {
           targetHandle: 'target',
           type: 'deletable',
           animated: true,
-          label: 'Fallback',
           style: { stroke: '#4ecdc4', strokeWidth: 2, strokeDasharray: '5,5' },
         });
       }

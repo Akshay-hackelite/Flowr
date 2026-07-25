@@ -12,6 +12,7 @@ export default function DeletableEdge({
   style = {},
   markerEnd,
   label,
+  selected,
 }) {
   const { setEdges } = useReactFlow();
   const [isHovered, setIsHovered] = useState(false);
@@ -30,21 +31,32 @@ export default function DeletableEdge({
     setEdges((edges) => edges.filter((e) => e.id !== id));
   };
 
+  const finalStyle = {
+    ...style,
+    stroke: selected ? 'var(--accent-primary, #4ecdc4)' : style.stroke,
+    strokeWidth: selected ? 4 : (style.strokeWidth || 2),
+    filter: selected ? 'drop-shadow(0 0 3px rgba(78, 205, 196, 0.6))' : 'none',
+  };
+
   return (
     <>
-      <g
+      <path
+        d={edgePath}
+        markerEnd={markerEnd}
+        style={{ ...finalStyle, pointerEvents: 'none' }}
+        className="react-flow__edge-path"
+        fill="none"
+      />
+      <path
+        d={edgePath}
+        fill="none"
+        strokeOpacity={0}
+        strokeWidth={20}
+        className="react-flow__edge-interaction nodrag nopan"
+        style={{ cursor: 'pointer', pointerEvents: 'stroke' }}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
-      >
-        <path
-          d={edgePath}
-          fill="none"
-          strokeOpacity={0}
-          strokeWidth={20}
-          style={{ cursor: 'pointer' }}
-        />
-        <BaseEdge path={edgePath} markerEnd={markerEnd} style={style} />
-      </g>
+      />
       <EdgeLabelRenderer>
         <div
           style={{
@@ -89,8 +101,9 @@ export default function DeletableEdge({
               fontSize: 14,
               fontWeight: 'bold',
               boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
-              opacity: isHovered || label ? 1 : 0,
+              opacity: (selected || isHovered || label) ? 1 : 0,
               transition: 'opacity 0.2s ease',
+              pointerEvents: (selected || isHovered || label) ? 'all' : 'none',
             }}
           >
             ×

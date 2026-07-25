@@ -78,11 +78,42 @@ export async function fetchWorkflowRuns(workflowId, limit = 50) {
   return data.runs;
 }
 
-export async function fetchClientMessages(clientId, limit = 100) {
-  const res = await fetch(`${API_BASE}/api/messages?client_id=${encodeURIComponent(clientId)}&limit=${limit}`);
+export async function fetchClientMessages(clientId, limit = 0) {
+  const res = await fetch(`${API_BASE}/api/messages?client_id=${encodeURIComponent(clientId)}&limit=${limit}&t=${Date.now()}`);
   if (!res.ok) throw new Error('Failed to fetch client messages');
   const data = await res.json();
   return data.messages;
+}
+
+export async function fetchClientContacts(clientId) {
+  const res = await fetch(`${API_BASE}/api/contacts?client_id=${encodeURIComponent(clientId)}`);
+  if (!res.ok) throw new Error('Failed to fetch client contacts');
+  const data = await res.json();
+  return data.contacts;
+}
+
+export async function fetchClientConversationMetadata(clientId) {
+  const res = await fetch(`${API_BASE}/api/conversations/metadata?client_id=${encodeURIComponent(clientId)}&t=${Date.now()}`);
+  if (!res.ok) throw new Error('Failed to fetch conversation metadata');
+  const data = await res.json();
+  return data.metadata;
+}
+
+export async function fetchContactChatStatus(clientId, contactPhone) {
+  const res = await fetch(`${API_BASE}/api/contacts/${encodeURIComponent(contactPhone)}/inbox/status?client_id=${encodeURIComponent(clientId)}&t=${Date.now()}`);
+  if (!res.ok) throw new Error('Failed to fetch contact status');
+  const data = await res.json();
+  return data.status;
+}
+
+export async function updateContactChatStatus(clientId, contactPhone, status) {
+  const res = await fetch(`${API_BASE}/api/contacts/${encodeURIComponent(contactPhone)}/inbox/status`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ client_id: clientId, status }),
+  });
+  if (!res.ok) throw new Error('Failed to update contact status');
+  return await res.json();
 }
 
 export async function fetchRunDebugData(workflowRunId) {

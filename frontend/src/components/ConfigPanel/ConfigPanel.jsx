@@ -387,6 +387,11 @@ function ListConfigEditor({ config, updateConfig }) {
     updateListConfig({ ...listConfig, sections: newSections });
   };
 
+  const removeSection = (sIdx) => {
+    const newSections = sections.filter((_, si) => si !== sIdx);
+    updateListConfig({ ...listConfig, sections: newSections });
+  };
+
   return (
     <div className="config-panel__section">
       <label className="config-panel__label">List Button Text</label>
@@ -401,13 +406,15 @@ function ListConfigEditor({ config, updateConfig }) {
       <label className="config-panel__label" style={{ marginTop: 12 }}>Sections</label>
       {sections.map((section, sIdx) => (
         <div key={sIdx} style={{ marginBottom: 8, padding: 8, background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
-          <input
-            className="config-panel__input"
-            value={section.title}
-            onChange={(e) => updateSection(sIdx, 'title', e.target.value)}
-            placeholder="Section title"
-            style={{ marginBottom: 6 }}
-          />
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '6px', alignItems: 'center' }}>
+            <input
+              className="config-panel__input"
+              value={section.title}
+              onChange={(e) => updateSection(sIdx, 'title', e.target.value)}
+              placeholder="Section title"
+              style={{ flex: 1, margin: 0 }}
+            />
+          </div>
           {section.rows.map((row, rIdx) => (
             <div key={row.id || rIdx} className="config-panel__option-item" style={{ marginBottom: 4 }}>
               <input
@@ -425,9 +432,20 @@ function ListConfigEditor({ config, updateConfig }) {
               <button className="config-panel__option-delete" onClick={() => removeRow(sIdx, rIdx)}>✕</button>
             </div>
           ))}
-          <button className="config-panel__add-btn" onClick={() => addRow(sIdx)} style={{ marginTop: 4 }}>
-            + Add Row
-          </button>
+          <div style={{ display: 'flex', gap: '8px', marginTop: 4 }}>
+            <button className="config-panel__add-btn" onClick={() => addRow(sIdx)} style={{ flex: 1 }}>
+              + Add Row
+            </button>
+            {sections.length > 1 && (
+              <button 
+                className="config-panel__add-btn" 
+                onClick={() => removeSection(sIdx)} 
+                style={{ flex: 1, background: 'rgba(239, 68, 68, 0.1)', color: 'var(--accent-red)', borderColor: 'rgba(239, 68, 68, 0.2)' }}
+              >
+                ✕ Remove Section
+              </button>
+            )}
+          </div>
         </div>
       ))}
       <button className="config-panel__add-btn" onClick={addSection}>

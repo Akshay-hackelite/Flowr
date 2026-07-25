@@ -19,7 +19,7 @@ export default function ToastContainer() {
       setToasts((prev) => [...prev, toast]);
       setTimeout(() => {
         setToasts((prev) => prev.filter((t) => t.id !== toast.id));
-      }, TOAST_DURATION);
+      }, toast.type === 'error' ? 7000 : TOAST_DURATION);
     };
     return () => { addToastFn = null; };
   }, []);
