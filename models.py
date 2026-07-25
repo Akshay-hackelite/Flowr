@@ -142,6 +142,17 @@ class WorkflowNodeRun(BaseModel):
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
 
+class ConversationMetadata(BaseModel):
+    client_id: str
+    contact_phone: str
+    profile_name: Optional[str] = None
+    status: Literal["open", "solved", "expired"] = "open"
+    operator: Literal["bot", "human"] = "bot"
+    source: Literal["Organic", "CTWA"] = "Organic"
+    source_id: Optional[str] = None
+    source_url: Optional[str] = None
+    headline: Optional[str] = None
+    last_customer_message_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -158,6 +169,7 @@ class MessageRecord(BaseModel):
     contact_phone: str
 
     direction: Literal["incoming", "outgoing"]
+    operator: Literal["bot", "human"] = "bot"
     message_type: str = "text"
 
     text: Optional[str] = None
@@ -346,6 +358,11 @@ No options"""
     variable_name: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("variable_name", "variableName"),
+    )
+
+    default_next_node_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("default_next_node_id", "defaultNextNodeId"),
     )
 
 

@@ -25,6 +25,7 @@ workflow_node_runs_collection = db["workflow_node_runs"]
 messages_collection = db["messages"]
 node_responses_collection = db["node_responses"]
 trigger_rules_collection = db["trigger_rules"]
+conversation_metadata_collection = db["conversation_metadata"]
 
 
 def init_db():

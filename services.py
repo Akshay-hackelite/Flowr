@@ -16,7 +16,8 @@ from models import (
     SendMessageConfig,
     AskQuestionConfig,
     ConditionConfig,
-    AskQuestionListConfig
+    AskQuestionListConfig,
+    ConversationMetadata
 )
 from storage import (
     save_client,
@@ -43,6 +44,10 @@ from storage import (
     update_message_status_by_meta_message_id,
     get_whatsapp_account_for_client,
     get_active_trigger_rules,
+    get_active_or_waiting_workflow_runs_for_contact,
+    upsert_conversation_metadata,
+    get_conversation_metadata,
+    has_message_with_wamid,
 )
 from whatsapp_service import (
     send_whatsapp_text_message,
@@ -207,8 +212,12 @@ def validate_workflow_graph(workflow: Workflow, nodes: list[WorkflowNode]) -> li
             continue
 
         if isinstance(config, AskQuestionConfig):
-            if not config.variable_name or not config.variable_name.strip():
-                errors.append(f"ask_question node '{node.id}' is missing a variable name.")
+            if config.input_type in ["buttons", "list"]:
+                if not config.default_next_node_id:
+                    short_q = config.question[:25] + "..." if len(config.question) > 25 else config.question
+                    errors.append(f"The 'Default Fallback' for the question '{short_q}' must be connected. It determines the next step if a user selects an invalid response or types an unrecognised message.")
+                elif config.default_next_node_id not in node_id_set:
+                    errors.append(f"ask_question node '{node.id}' points to non-existent default node.")
 
             if config.input_type == "buttons":
                 if config.list_config:
@@ -260,8 +269,6 @@ def validate_workflow_graph(workflow: Workflow, nodes: list[WorkflowNode]) -> li
                         if row.next_node_id and row.next_node_id not in node_id_set:
                             errors.append(f"ask_question node '{node.id}' list row {index + 1} points to non-existent node.")
             else:
-                if config.options:
-                    errors.append(f"text ask_question node '{node.id}' should not have options.")
                 if config.list_config:
                     errors.append(f"text ask_question node '{node.id}' should not have list_config.")
                 if node.next_node_id and node.next_node_id not in node_id_set:
@@ -381,6 +388,7 @@ def create_outgoing_message(
         node_run_id=node_run.id,
         contact_phone=run.contact_phone,
         direction="outgoing",
+        operator="bot",
         message_type=message_type,
         text=text,
         metadata=metadata or {},
@@ -401,7 +409,12 @@ def create_incoming_message(
     workflow_run_id: str | None = None,
     node_run_id: str | None = None,
     message_type: str = "text",
+    wamid: str | None = None,
 ):
+    metadata = {}
+    if wamid:
+        metadata["wamid"] = wamid
+
     message = MessageRecord(
         id=make_message_id(),
         client_id=client_id,
@@ -411,9 +424,11 @@ def create_incoming_message(
         node_run_id=node_run_id,
         contact_phone=contact_phone,
         direction="incoming",
+        operator="human",
         message_type=message_type,
         text=text,
         status="received",
+        metadata=metadata,
     )
 
     save_message(message)
@@ -876,6 +891,7 @@ def continue_existing_run(
     run: WorkflowRun,
     user_text: str,
     message_type: str = "text",
+    wamid: str | None = None,
 ):
     if run.status != "waiting_for_user":
         raise HTTPException(
@@ -938,15 +954,9 @@ def continue_existing_run(
             selected_next_node_id = selected_option.next_node_id
         else:
             # User typed an invalid or custom option:
-            # Route to default fallback handle if configured (stored in next_node_id or default_next_node_id)
+            # Route to default fallback handle.
             selected_label = user_text
-            # Check if there is a default fallback handle configured on node or config
-            default_fallback = None
-            if hasattr(config, "default_next_node_id") and getattr(config, "default_next_node_id", None):
-                default_fallback = config.default_next_node_id
-            elif isinstance(waiting_node.config, dict):
-                default_fallback = waiting_node.config.get("default_next_node_id")
-            selected_next_node_id = default_fallback or waiting_node.next_node_id
+            selected_next_node_id = config.default_next_node_id or waiting_node.next_node_id
 
     incoming_message = create_incoming_message(
         client_id=run.client_id,
@@ -957,6 +967,7 @@ def continue_existing_run(
         contact_phone=run.contact_phone,
         text=user_text,
         message_type=message_type,
+        wamid=wamid,
     )
 
     variable_name = config.variable_name
@@ -1008,6 +1019,8 @@ def start_new_run(
     contact_phone: str,
     first_message_text: str | None = None,
     first_message_type: str = "text",
+    contact_name: str | None = None,
+    wamid: str | None = None,
 ):
     run = WorkflowRun(
         id=make_workflow_run_id(workflow.id),
@@ -1017,7 +1030,11 @@ def start_new_run(
         contact_phone=contact_phone,
         status="active",
         current_node_id=workflow.first_node_id,
-        variables={"last_message": first_message_text or ""},
+        variables={
+            "last_message": first_message_text or "",
+            "contact_phone": contact_phone,
+            "contact_name": contact_name or "Unknown",
+        },
         started_at=now_utc(),
     )
 
@@ -1031,6 +1048,7 @@ def start_new_run(
             contact_phone=run.contact_phone,
             text=first_message_text,
             message_type=first_message_type,
+            wamid=wamid,
         )
 
     nodes = get_workflow_nodes(workflow.id)
@@ -1048,7 +1066,19 @@ def process_incoming_message(
     text: str,
     message_type: str = "text",
     source: str = "test_webhook",
+    profile_name: str | None = None,
+    referral: dict | None = None,
+    wamid: str | None = None,
 ):
+    if wamid and has_message_with_wamid(wamid):
+        return {
+            "mode": "ignored_duplicate_webhook",
+            "source": source,
+            "from_phone": from_phone,
+            "phone_number_id": phone_number_id,
+            "reason": f"Duplicate webhook detected for wamid {wamid}",
+        }
+
     account = get_whatsapp_account_by_phone_number_id(
         phone_number_id
     )
@@ -1059,11 +1089,69 @@ def process_incoming_message(
             detail="WhatsApp account not found for this phone_number_id.",
         )
 
+    meta = get_conversation_metadata(account.client_id, from_phone)
+    if meta:
+        # Expiration logic
+        if meta.status in ("open", "solved"):
+            if meta.last_customer_message_at:
+                last_msg = meta.last_customer_message_at
+                if last_msg.tzinfo is None:
+                    last_msg = last_msg.replace(tzinfo=timezone.utc)
+                if (datetime.now(timezone.utc) - last_msg).total_seconds() > 24 * 3600:
+                    meta.status = "expired"
+
+        if meta.status == "solved" or meta.status == "expired":
+            meta.status = "open"
+            meta.operator = "bot"
+            
+        meta.last_customer_message_at = now_utc()
+        upsert_conversation_metadata(meta)
+    else:
+        meta = ConversationMetadata(
+            client_id=account.client_id,
+            contact_phone=from_phone,
+            profile_name=profile_name,
+            status="open",
+            operator="bot",
+            source="CTWA" if referral else "Organic",
+            source_id=referral.get("source_id") if referral else None,
+            source_url=referral.get("source_url") if referral else None,
+            headline=referral.get("headline") if referral else None,
+            last_customer_message_at=now_utc(),
+            created_at=now_utc(),
+            updated_at=now_utc(),
+        )
+        upsert_conversation_metadata(meta)
+
     active_run = find_active_workflow_run(
         client_id=account.client_id,
         whatsapp_account_id=account.id,
         contact_phone=from_phone,
     )
+        
+    # HUMAN HANDOFF CHECK
+    # If the human has taken over, we DO NOT trigger any bot responses or create new runs!
+    if meta.operator == "human":
+        # Just record the incoming message and ignore workflows
+        incoming_message = create_incoming_message(
+            client_id=account.client_id,
+            whatsapp_account_id=account.id,
+            workflow_id="human_handoff",
+            workflow_run_id=active_run.id if active_run else "human_handoff",
+            node_run_id=None,
+            contact_phone=from_phone,
+            text=text,
+            message_type=message_type,
+            wamid=wamid,
+        )
+        return {
+            "mode": "ignored_human_handoff",
+            "source": source,
+            "from_phone": from_phone,
+            "phone_number_id": phone_number_id,
+            "message_id": incoming_message.id,
+            "reason": "Human operator has taken over the conversation.",
+        }
 
     if active_run:
         if active_run.status == "waiting_for_user":
@@ -1071,6 +1159,7 @@ def process_incoming_message(
                 run=active_run,
                 user_text=text,
                 message_type=message_type,
+                wamid=wamid,
             )
 
             return {
@@ -1092,6 +1181,7 @@ def process_incoming_message(
                 contact_phone=active_run.contact_phone,
                 text=text,
                 message_type=message_type,
+                wamid=wamid,
                 )
 
             return {
@@ -1150,6 +1240,8 @@ def process_incoming_message(
         contact_phone=from_phone,
         first_message_text=text,
         first_message_type=message_type,
+        contact_name=profile_name,
+        wamid=wamid,
     )
 
     return {
@@ -1225,6 +1317,14 @@ def extract_whatsapp_message(payload: dict[str, Any]) -> dict[str, Any] | None:
 
         from_phone = message["from"]
         message_type = message.get("type", "unknown")
+        wamid = message.get("id")
+
+        contacts = value.get("contacts", [])
+        profile_name = None
+        if contacts and "profile" in contacts[0]:
+            profile_name = contacts[0]["profile"].get("name")
+
+        referral = message.get("referral", None)
 
         text = ""
 
@@ -1261,6 +1361,9 @@ def extract_whatsapp_message(payload: dict[str, Any]) -> dict[str, Any] | None:
             "text": text,
             "message_type": message_type,
             "raw_message": message,
+            "profile_name": profile_name,
+            "referral": referral,
+            "wamid": wamid,
         }
 
     except (KeyError, IndexError, TypeError):
@@ -1360,6 +1463,9 @@ def route_whatsapp_webhook_payload(payload: dict[str, Any]):
             text=extracted["text"],
             message_type=extracted["message_type"],
             source="whatsapp_webhook",
+            profile_name=extracted.get("profile_name"),
+            referral=extracted.get("referral"),
+            wamid=extracted.get("wamid"),
         )
     if value.get("statuses"): # if the webhook contains status i.e. it is the webhook that was fired because the message we sent to user , now it is either sent or delivered or read. thus this webhook just informs us about the updated status of our sent msg.
         return process_status_update_webhook(payload)
@@ -1374,6 +1480,19 @@ def send_human_reply_message(client_id: str, contact_phone: str, text: str) -> M
     account = get_whatsapp_account_for_client(client_id)
     account_id = account.id if account else "test_account_id"
 
+    # If operator responds manually, stop any active bot runs for this contact
+    active_runs = get_active_or_waiting_workflow_runs_for_contact(client_id, contact_phone)
+    for run in active_runs:
+        run.status = "completed"
+        run.completed_at = now_utc()
+        save_workflow_run(run)
+
+    # Lock the bot out by setting operator = "human" in metadata
+    meta = get_conversation_metadata(client_id, contact_phone)
+    if meta:
+        meta.operator = "human"
+        upsert_conversation_metadata(meta)
+
     message = MessageRecord(
         id=make_message_id(),
         client_id=client_id,
@@ -1383,6 +1502,7 @@ def send_human_reply_message(client_id: str, contact_phone: str, text: str) -> M
         node_run_id=None,
         contact_phone=contact_phone,
         direction="outgoing",
+        operator="human",
         message_type="text",
         text=text,
         metadata={"human_handoff": True},

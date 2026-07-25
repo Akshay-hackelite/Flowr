@@ -49,6 +49,13 @@ from storage import (
     get_trigger_rules_for_client,
     delete_trigger_rule,
     get_client_by_id,
+    get_active_or_waiting_workflow_runs_for_contact,
+    get_latest_workflow_run_for_contact,
+    get_contacts_for_client,
+    get_all_conversation_metadata_for_client,
+    get_conversation_metadata,
+    upsert_conversation_metadata,
+    save_workflow_run,
 )
 from datetime import datetime, timezone
 
@@ -339,10 +346,15 @@ def save_canvas(workflow_id: str, req: SaveCanvasRequest):
     save_workflow(workflow)
 
     validation_errors = validate_workflow_graph(workflow, saved_nodes)
-    if workflow.status == "published" and validation_errors:
+    if validation_errors:
+        first_error = validation_errors[0]
+        if isinstance(first_error, dict):
+            error_msg = first_error.get("message", str(first_error))
+        else:
+            error_msg = str(first_error)
         raise HTTPException(
             status_code=400,
-            detail={"message": "Cannot save invalid published workflow. Please fix errors or unpublish first.", "errors": validation_errors}
+            detail=error_msg
         )
 
     return {
@@ -357,11 +369,100 @@ def save_canvas(workflow_id: str, req: SaveCanvasRequest):
 
 
 @router.get("/api/messages")
-def list_client_messages(client_id: str = Query(...), limit: int = Query(default=100)):
+def list_client_messages(client_id: str = Query(...), limit: int = Query(default=0)):
+    # Used by frontend Live Inbox: Returns ALL messages for the client
+    # The frontend downloads all messages and groups them into contacts locally.
     messages = get_messages_for_client(client_id, limit=limit)
     return {
         "messages": [m.model_dump(mode="json") for m in messages],
     }
+
+@router.get("/api/contacts/{contact_phone}/messages")
+def list_contact_messages(contact_phone: str, client_id: str = Query(...), limit: int = Query(default=0)):
+    # For development purposes / API Documentation: Returns messages ONLY for this contact
+    # Not currently used by the frontend Live Inbox.
+    messages = get_messages_for_client(client_id, limit=limit, contact_phone=contact_phone)
+    return {
+        "messages": [m.model_dump(mode="json") for m in messages],
+    }
+
+@router.get("/api/conversations/metadata")
+def list_conversation_metadata(client_id: str = Query(...)):
+    metadata = get_all_conversation_metadata_for_client(client_id)
+    return {
+        "metadata": [m.model_dump(mode="json") for m in metadata]
+    }
+
+@router.get("/api/contacts")
+def list_client_contacts(client_id: str = Query(...)):
+    # For development purposes: Returns a lightweight aggregated list of contacts.
+    # Not currently used by the frontend Live Inbox.
+    contacts = get_contacts_for_client(client_id)
+    return {
+        "contacts": contacts,
+    }
+
+
+class ContactStatusUpdateRequest(BaseModel):
+    client_id: str
+    status: str
+
+
+@router.get("/api/contacts/{contact_phone}/inbox/status")
+def get_contact_inbox_status(contact_phone: str, client_id: str = Query(...)):
+    meta = get_conversation_metadata(client_id, contact_phone)
+    if not meta:
+        return {"status": "open"}
+    
+    # Expiration overrides everything else
+    if meta.status in ("open", "solved"):
+        if meta.last_customer_message_at:
+            last_msg_time = meta.last_customer_message_at
+            if last_msg_time.tzinfo is None:
+                last_msg_time = last_msg_time.replace(tzinfo=timezone.utc)
+                
+            time_diff = datetime.now(timezone.utc) - last_msg_time
+            if time_diff.total_seconds() > 24 * 3600:
+                meta.status = "expired"
+                meta.operator = "bot"
+                upsert_conversation_metadata(meta)
+                
+                active_runs = get_active_or_waiting_workflow_runs_for_contact(client_id, contact_phone)
+                for run in active_runs:
+                    run.status = "completed"
+                    run.completed_at = datetime.now(timezone.utc)
+                    save_workflow_run(run)
+                    
+                return {"status": "expired"}
+                
+    return {"status": meta.status}
+
+
+@router.put("/api/contacts/{contact_phone}/inbox/status")
+def update_contact_inbox_status(contact_phone: str, req: ContactStatusUpdateRequest):
+    new_status = req.status.lower()
+    meta = get_conversation_metadata(req.client_id, contact_phone)
+    if not meta:
+        from models import ConversationMetadata
+        meta = ConversationMetadata(
+            client_id=req.client_id,
+            contact_phone=contact_phone,
+            status=new_status,
+            operator="bot",
+        )
+    else:
+        meta.status = new_status
+
+    if new_status == "solved":
+        meta.operator = "bot"
+        active_runs = get_active_or_waiting_workflow_runs_for_contact(req.client_id, contact_phone)
+        for run in active_runs:
+            run.status = "completed"
+            run.completed_at = datetime.now(timezone.utc)
+            save_workflow_run(run)
+            
+    upsert_conversation_metadata(meta)
+    return {"status": req.status.lower()}
 
 
 # ──────────────────────────────────────────────

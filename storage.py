@@ -12,6 +12,7 @@ from database import (
     messages_collection,
     node_responses_collection,
     trigger_rules_collection,
+    conversation_metadata_collection,
 )
 from models import (
     Client,
@@ -24,6 +25,7 @@ from models import (
     MessageRecord,
     NodeResponse,
     TriggerRule,
+    ConversationMetadata,
 )
 
 
@@ -491,6 +493,29 @@ def get_workflow_runs_for_workflow(
     ]
 
 
+def get_active_or_waiting_workflow_runs_for_contact(client_id: str, contact_phone: str) -> list[WorkflowRun]:
+    documents = workflow_runs_collection.find({
+        "client_id": client_id,
+        "contact_phone": contact_phone,
+        "status": {"$in": ["active", "waiting_for_user"]}
+    }).sort("created_at", -1)
+
+    return [
+        parse_model(WorkflowRun, document)
+        for document in documents
+    ]
+
+
+def get_latest_workflow_run_for_contact(client_id: str, contact_phone: str) -> Optional[WorkflowRun]:
+    document = workflow_runs_collection.find_one(
+        {"client_id": client_id, "contact_phone": contact_phone},
+        sort=[("created_at", -1)]
+    )
+    if not document:
+        return None
+    return parse_model(WorkflowRun, document)
+
+
 def soft_delete_workflow(workflow_id: str):
     current_time = now_utc()
 
@@ -518,15 +543,34 @@ def get_workflow_node_by_id(node_id: str) -> Optional[WorkflowNode]:
     return parse_model(WorkflowNode, document)
 
 
-def get_messages_for_client(client_id: str, limit: int = 100) -> list[MessageRecord]:
-    documents = messages_collection.find(
-        {"client_id": client_id}
-    ).sort("created_at", -1).limit(limit)
+def get_messages_for_client(client_id: str, limit: int = 0, contact_phone: Optional[str] = None) -> list[MessageRecord]:
+    query = {"client_id": client_id}
+    if contact_phone:
+        query["contact_phone"] = contact_phone
+    cursor = messages_collection.find(query).sort("created_at", -1)
+    if limit and limit > 0:
+        cursor = cursor.limit(limit)
 
     return [
         parse_model(MessageRecord, document)
-        for document in documents
+        for document in cursor
     ]
+
+
+def get_contacts_for_client(client_id: str) -> list[dict]:
+    pipeline = [
+        {"$match": {"client_id": client_id, "contact_phone": {"$exists": True, "$ne": None}}},
+        {
+            "$group": {
+                "_id": "$contact_phone",
+                "last_message_time": {"$max": "$created_at"},
+                "message_count": {"$sum": 1}
+            }
+        },
+        {"$sort": {"last_message_time": -1}}
+    ]
+    results = list(messages_collection.aggregate(pipeline))
+    return [{"contact_phone": r["_id"], "last_message_time": r["last_message_time"], "message_count": r["message_count"]} for r in results]
 
 
 def get_user_by_email(email: str) -> Optional[User]:
@@ -587,3 +631,32 @@ def get_active_trigger_rules(client_id: str) -> list[TriggerRule]:
 
 def delete_trigger_rule(rule_id: str):
     trigger_rules_collection.delete_one({"id": rule_id})
+
+
+def get_all_conversation_metadata_for_client(client_id: str) -> list[ConversationMetadata]:
+    cursor = conversation_metadata_collection.find({"client_id": client_id})
+    return [parse_model(ConversationMetadata, document) for document in cursor]
+
+def has_message_with_wamid(wamid: str) -> bool:
+    count = messages_collection.count_documents({"metadata.wamid": wamid}, limit=1)
+    return count > 0
+
+def get_conversation_metadata(client_id: str, contact_phone: str) -> Optional[ConversationMetadata]:
+    document = conversation_metadata_collection.find_one({
+        "client_id": client_id,
+        "contact_phone": contact_phone
+    })
+    if document:
+        return parse_model(ConversationMetadata, document)
+    return None
+
+def upsert_conversation_metadata(metadata: ConversationMetadata):
+    data = metadata.model_dump(mode="python", exclude_none=True)
+    data.pop("created_at", None)
+    data["updated_at"] = now_utc()
+    
+    conversation_metadata_collection.update_one(
+        {"client_id": metadata.client_id, "contact_phone": metadata.contact_phone},
+        {"$set": data, "$setOnInsert": {"created_at": now_utc()}},
+        upsert=True
+    )
