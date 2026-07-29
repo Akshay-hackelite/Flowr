@@ -41,6 +41,12 @@ class WhatsAppAccount(BaseModel): # currently it does not have access_token and 
     updated_at: Optional[datetime] = None
 
 
+class TriggerKeyword(BaseModel):
+    keyword: str
+    match_type: Literal["exact", "fuzzy"] = "exact"
+    fuzzy_threshold: int = 80
+
+
 class Workflow(BaseModel):
     id: str
     client_id: str
@@ -55,7 +61,10 @@ class Workflow(BaseModel):
     node_ids: list[str] = Field(default_factory=list)
     first_node_id: Optional[str] = None
 
-    status: Literal["draft", "published", "archived"] = "draft"
+    is_default: bool = False
+    trigger_on: bool = False
+    trigger_keywords: list[TriggerKeyword] = Field(default_factory=list)
+
     deleted: bool = False
 
     created_at: Optional[datetime] = None
@@ -168,7 +177,7 @@ class MessageRecord(BaseModel):
 
     contact_phone: str
 
-    direction: Literal["incoming", "outgoing"]
+    direction: Literal["incoming", "outgoing", "system"]
     operator: Literal["bot", "human"] = "bot"
     message_type: str = "text"
 
@@ -406,17 +415,6 @@ class SendWhatsAppListTestRequest(BaseModel):
     to_phone: str
     body_text: str
     list_config: dict
-
-
-class TriggerRule(BaseModel):
-    id: str
-    client_id: str
-    workflow_id: str
-    keyword: str
-    match_type: Literal["exact", "contains"] = "contains"
-    is_active: bool = True
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
 
 
 class SignupRequest(BaseModel):

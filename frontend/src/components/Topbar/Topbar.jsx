@@ -3,14 +3,12 @@ import './Topbar.css';
 
 export default function Topbar({
   workflowName,
-  workflowStatus,
+  isDefault,
   onNameChange,
   onSave,
-  onPublish,
-  onUnpublish,
-  onBack,
   onOpenRuns,
-  saveStatus, // 'idle' | 'saving' | 'saved' | 'error'
+  onOpenTriggerSettings,
+  saveStatus,
   isSaving,
 }) {
   return (
@@ -35,9 +33,11 @@ export default function Topbar({
           onChange={(e) => onNameChange(e.target.value)}
           placeholder="Workflow name..."
         />
-        <span className={`topbar__status-badge topbar__status-badge--${workflowStatus}`}>
-          {workflowStatus}
-        </span>
+        {isDefault && (
+          <span className="topbar__status-badge" style={{ backgroundColor: 'rgba(78, 205, 196, 0.15)', color: '#4ecdc4' }}>
+            ⭐ Default
+          </span>
+        )}
       </div>
 
       <div className="topbar__actions">
@@ -64,21 +64,13 @@ export default function Topbar({
           💾 Save
         </button>
 
-        {workflowStatus === 'published' ? (
-          <button
-            className="topbar__btn topbar__btn--danger"
-            onClick={onUnpublish}
-          >
-            ⏸ Unpublish
-          </button>
-        ) : (
-          <button
-            className="topbar__btn topbar__btn--publish"
-            onClick={onPublish}
-          >
-            🚀 Publish
-          </button>
-        )}
+        <button
+          className="topbar__btn"
+          style={{ backgroundColor: 'rgba(255,193,7,0.15)', color: '#ffc107', border: '1px solid rgba(255,193,7,0.3)' }}
+          onClick={onOpenTriggerSettings}
+        >
+          🎯 Trigger Settings
+        </button>
       </div>
     </header>
   );

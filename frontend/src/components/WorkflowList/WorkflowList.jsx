@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { fetchWorkflows, createWorkflow, deleteWorkflow } from '../../api/client';
+import { fetchWorkflows, createWorkflow, deleteWorkflow, setWorkflowDefault } from '../../api/client';
 import './WorkflowList.css';
 
 export default function WorkflowList({
@@ -71,6 +71,17 @@ export default function WorkflowList({
     }
   };
 
+  const handleSetDefault = async (e, workflowId) => {
+    e.stopPropagation();
+    if (!confirm('Only 1 workflow can be set to default. If you press Yes, the old workflow will be replaced.')) return;
+    try {
+      await setWorkflowDefault(workflowId);
+      loadWorkflows();
+    } catch (err) {
+      alert('Failed to set default workflow: ' + err.message);
+    }
+  };
+
   const formatDate = (dateStr) => {
     if (!dateStr) return 'N/A';
     const d = new Date(dateStr);
@@ -132,9 +143,11 @@ export default function WorkflowList({
                   >
                     {wf.name}
                   </a>
-                  <span className={`workflow-card__status workflow-card__status--${wf.status}`}>
-                    {wf.status}
-                  </span>
+                  {wf.is_default && (
+                    <span style={{ backgroundColor: 'rgba(78, 205, 196, 0.15)', color: '#4ecdc4', padding: '2px 8px', borderRadius: '12px', fontSize: '11px', fontWeight: 600 }}>
+                      ⭐ Default
+                    </span>
+                  )}
                 </div>
                 <div className="workflow-card__desc">
                   {wf.description || 'No description'}
@@ -162,6 +175,15 @@ export default function WorkflowList({
                   >
                     ⚡ Runs
                   </a>
+                  {!wf.is_default && (
+                    <button
+                      className="workflow-card__action-btn"
+                      style={{ flex: 1, backgroundColor: 'rgba(255,255,255,0.05)', color: '#fff', border: '1px solid rgba(255,255,255,0.1)', textAlign: 'center' }}
+                      onClick={(e) => handleSetDefault(e, wf.id)}
+                    >
+                      ⭐ Set Default
+                    </button>
+                  )}
                   <button
                     className="workflow-card__action-btn workflow-card__action-btn--delete"
                     onClick={(e) => handleDelete(e, wf.id)}

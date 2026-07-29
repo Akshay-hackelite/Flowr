@@ -310,20 +310,26 @@ export default function Inbox({ onBack, clientId }) {
                         Workflow is stopped and set to completed. The operator is now &apos;human&apos;.
                       </div>
                     )}
-                    <div className={`message-bubble message-bubble--${msg.direction}`}>
-                      <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-start' }}>
-                        {msg.operator === 'bot' && msg.direction === 'outgoing' && (
-                          <span style={{ fontSize: '1.1rem', marginTop: '-2px' }}>🤖</span>
-                        )}
-                        <div style={{ flex: 1, wordBreak: 'break-word', minWidth: (msg.metadata?.options || msg.metadata?.list_config) ? '200px' : 'auto' }}>
-                          {renderMessageContent(msg, sortedChat)}
+                    {msg.direction === 'system' ? (
+                      <div className="inbox-system-event">
+                        {msg.text}
+                      </div>
+                    ) : (
+                      <div className={`message-bubble message-bubble--${msg.direction}`}>
+                        <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-start' }}>
+                          {msg.operator === 'bot' && msg.direction === 'outgoing' && (
+                            <span style={{ fontSize: '1.1rem', marginTop: '-2px' }}>🤖</span>
+                          )}
+                          <div style={{ flex: 1, wordBreak: 'break-word', minWidth: (msg.metadata?.options || msg.metadata?.list_config) ? '200px' : 'auto' }}>
+                            {renderMessageContent(msg, sortedChat)}
+                          </div>
+                        </div>
+                        <div className="message-bubble__meta">
+                          <span>{formatTime(msg.created_at)}</span>
+                          {msg.direction === 'outgoing' ? renderStatusIcon(msg.status) : <span className="message-bubble__status">({msg.status})</span>}
                         </div>
                       </div>
-                      <div className="message-bubble__meta">
-                        <span>{formatTime(msg.created_at)}</span>
-                        {msg.direction === 'outgoing' ? renderStatusIcon(msg.status) : <span className="message-bubble__status">({msg.status})</span>}
-                      </div>
-                    </div>
+                    )}
                   </div>
                 );
               })

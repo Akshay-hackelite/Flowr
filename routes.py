@@ -13,7 +13,6 @@ from models import (
     SignupRequest,
     LoginRequest,
     GoogleAuthRequest,
-    TriggerRule,
     SendMessageReplyRequest,
     Client,
     User,
@@ -45,9 +44,6 @@ from storage import (
     save_client,
     save_whatsapp_account,
     get_all_workflow_runs,
-    save_trigger_rule,
-    get_trigger_rules_for_client,
-    delete_trigger_rule,
     get_client_by_id,
     get_active_or_waiting_workflow_runs_for_contact,
     get_latest_workflow_run_for_contact,
@@ -84,7 +80,9 @@ class CreateWorkflowRequest(BaseModel):
 class UpdateWorkflowRequest(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
-    status: Optional[str] = None
+    is_default: Optional[bool] = None
+    trigger_on: Optional[bool] = None
+    trigger_keywords: Optional[list[dict]] = None
     updated_by_user_id: Optional[str] = None
 
 
@@ -134,6 +132,9 @@ def create_workflow(req: CreateWorkflowRequest):
     short = uuid.uuid4().hex[:8]
     workflow_id = f"{req.client_id}/workflow:{short}"
 
+    existing_workflows = get_workflows_for_client(req.client_id)
+    is_default = len(existing_workflows) == 0
+
     workflow = Workflow(
         id=workflow_id,
         client_id=req.client_id,
@@ -144,7 +145,9 @@ def create_workflow(req: CreateWorkflowRequest):
         description=req.description,
         node_ids=[],
         first_node_id=None,
-        status="draft",
+        is_default=is_default,
+        trigger_on=False,
+        trigger_keywords=[],
         deleted=False,
     )
     save_workflow(workflow)
@@ -168,26 +171,32 @@ def update_workflow(workflow_id: str, req: UpdateWorkflowRequest):
     if req.updated_by_user_id is not None:
         workflow.updated_by_user_id = req.updated_by_user_id
 
-    if req.status is not None:
-        if req.status == "published":
-            # Enforce one published workflow per account
-            existing = get_published_workflows_for_account(
-                client_id=workflow.client_id,
-                whatsapp_account_id=workflow.whatsapp_account_id,
-            )
-            for ex in existing:
-                if ex.id != workflow.id:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Another workflow '{ex.name}' is already published for this WhatsApp account. Unpublish it first.",
-                    )
-        workflow.status = req.status
+    if req.trigger_on is not None:
+        workflow.trigger_on = req.trigger_on
+    if req.trigger_keywords is not None:
+        workflow.trigger_keywords = req.trigger_keywords
 
     save_workflow(workflow)
     return {
         "message": "Workflow updated.",
         "workflow": workflow.model_dump(mode="json"),
     }
+
+@router.post("/api/workflows/{workflow_id:path}/set-default")
+def set_workflow_default(workflow_id: str):
+    workflow = get_workflow_by_id(workflow_id)
+    if not workflow:
+        raise HTTPException(status_code=404, detail="Workflow not found.")
+
+    all_workflows = get_workflows_for_client(workflow.client_id)
+    for w in all_workflows:
+        if w.id == workflow.id:
+            w.is_default = True
+        else:
+            w.is_default = False
+        save_workflow(w)
+
+    return {"message": "Default workflow updated."}
 
 
 @router.delete("/api/workflows/{workflow_id:path}")
@@ -788,27 +797,3 @@ def send_reply_message(req: SendMessageReplyRequest):
     msg = send_human_reply_message(req.client_id, req.contact_phone, req.text)
     return {"status": "sent", "message": msg.model_dump(mode="json")}
 
-
-# ──────────────────────────────────────────────
-# Trigger Rules Dashboard API
-# ──────────────────────────────────────────────
-
-@router.get("/api/trigger-rules")
-def list_trigger_rules(client_id: str = Query(...)):
-    rules = get_trigger_rules_for_client(client_id)
-    return {"rules": [r.model_dump(mode="json") for r in rules]}
-
-
-@router.post("/api/trigger-rules")
-def create_or_update_trigger_rule(rule: TriggerRule):
-    if not rule.created_at:
-        rule.created_at = datetime.now(timezone.utc)
-    rule.updated_at = datetime.now(timezone.utc)
-    save_trigger_rule(rule)
-    return {"status": "saved", "rule": rule.model_dump(mode="json")}
-
-
-@router.delete("/api/trigger-rules/{rule_id}")
-def remove_trigger_rule(rule_id: str):
-    delete_trigger_rule(rule_id)
-    return {"status": "deleted", "id": rule_id}

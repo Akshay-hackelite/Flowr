@@ -5,9 +5,10 @@ import Sidebar from './components/Sidebar/Sidebar';
 import WorkflowCanvas from './components/Canvas/WorkflowCanvas';
 import ConfigPanel from './components/ConfigPanel/ConfigPanel';
 import WorkflowRunsViewer from './components/Runs/WorkflowRunsViewer';
-import { fetchWorkflow, saveCanvas, updateWorkflow, publishWorkflowBackend, unpublishWorkflowBackend } from './api/client';
+import { fetchWorkflow, saveCanvas, updateWorkflow } from './api/client';
 import { backendToReactFlow } from './utils/serializer';
 import { showToast } from './components/common/Toast';
+import TriggerSettingsModal from './components/TriggerSettingsModal';
 
 export default function WorkflowEditor({ workflowId, onBack, initialShowRuns = false, userId }) {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -20,6 +21,7 @@ export default function WorkflowEditor({ workflowId, onBack, initialShowRuns = f
   const [isSaving, setIsSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showRuns, setShowRuns] = useState(initialShowRuns);
+  const [showTriggerSettings, setShowTriggerSettings] = useState(false);
 
   // Load workflow from backend
   useEffect(() => {
@@ -136,28 +138,13 @@ export default function WorkflowEditor({ workflowId, onBack, initialShowRuns = f
     }
   }, [nodes, edges, workflowId, workflowName, workflowData]);
 
-  // Publish workflow
-  const handlePublish = useCallback(async () => {
+  // Refresh workflow data (after trigger settings saved)
+  const refreshWorkflow = useCallback(async () => {
     try {
-      // Save first
-      await handleSave();
-
-      await publishWorkflowBackend(workflowId);
-      setWorkflowStatus('published');
-      showToast('Workflow published! 🚀', 'success');
+      const data = await fetchWorkflow(workflowId);
+      setWorkflowData(data.workflow);
     } catch (err) {
-      showToast(err.message, 'error');
-    }
-  }, [handleSave, workflowId]);
-
-  // Unpublish workflow
-  const handleUnpublish = useCallback(async () => {
-    try {
-      await unpublishWorkflowBackend(workflowId);
-      setWorkflowStatus('draft');
-      showToast('Workflow unpublished', 'info');
-    } catch (err) {
-      showToast(err.message, 'error');
+      console.error('Failed to refresh workflow:', err);
     }
   }, [workflowId]);
 
@@ -206,13 +193,12 @@ export default function WorkflowEditor({ workflowId, onBack, initialShowRuns = f
     <div style={{ height: '100vh', overflow: 'hidden' }}>
       <Topbar
         workflowName={workflowName}
-        workflowStatus={workflowStatus}
+        isDefault={workflowData?.is_default}
         onNameChange={setWorkflowName}
         onSave={handleSave}
-        onPublish={handlePublish}
-        onUnpublish={handleUnpublish}
-        onBack={onBack}
         onOpenRuns={() => setShowRuns(true)}
+        onOpenTriggerSettings={() => setShowTriggerSettings(true)}
+        onBack={onBack}
         saveStatus={saveStatus}
         isSaving={isSaving}
       />
@@ -248,6 +234,13 @@ export default function WorkflowEditor({ workflowId, onBack, initialShowRuns = f
           onClose={() => setShowRuns(false)}
         />
       )}
+
+      <TriggerSettingsModal
+        isOpen={showTriggerSettings}
+        onClose={() => setShowTriggerSettings(false)}
+        workflow={workflowData}
+        onSaved={refreshWorkflow}
+      />
     </div>
   );
 }

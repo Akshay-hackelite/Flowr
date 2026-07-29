@@ -168,24 +168,13 @@ export async function fetchAllRuns(clientId, limit = 100) {
   return data.runs;
 }
 
-export async function publishWorkflowBackend(workflowId) {
-  const res = await fetch(`${API_BASE}/api/workflows/${encodeURIComponent(workflowId)}/publish`, {
+export async function setWorkflowDefault(workflowId) {
+  const res = await fetch(`${API_BASE}/api/workflows/${encodeURIComponent(workflowId)}/set-default`, {
     method: 'POST',
   });
   if (!res.ok) {
     const err = await res.json();
-    throw new Error(err.detail || 'Failed to publish workflow');
-  }
-  return await res.json();
-}
-
-export async function unpublishWorkflowBackend(workflowId) {
-  const res = await fetch(`${API_BASE}/api/workflows/${encodeURIComponent(workflowId)}/unpublish`, {
-    method: 'POST',
-  });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.detail || 'Failed to unpublish workflow');
+    throw new Error(err.detail || 'Failed to set default workflow');
   }
   return await res.json();
 }
@@ -200,33 +189,5 @@ export async function sendHumanReply({ clientId, contactPhone, text }) {
     const err = await res.json();
     throw new Error(err.detail || 'Failed to send reply');
   }
-  return await res.json();
-}
-
-export async function fetchTriggerRules(clientId) {
-  const res = await fetch(`${API_BASE}/api/trigger-rules?client_id=${encodeURIComponent(clientId)}`);
-  if (!res.ok) throw new Error('Failed to fetch trigger rules');
-  const data = await res.json();
-  return data.rules;
-}
-
-export async function saveTriggerRule(rule) {
-  const res = await fetch(`${API_BASE}/api/trigger-rules`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(rule),
-  });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.detail || 'Failed to save trigger rule');
-  }
-  return await res.json();
-}
-
-export async function deleteTriggerRule(ruleId) {
-  const res = await fetch(`${API_BASE}/api/trigger-rules/${encodeURIComponent(ruleId)}`, {
-    method: 'DELETE',
-  });
-  if (!res.ok) throw new Error('Failed to delete trigger rule');
   return await res.json();
 }

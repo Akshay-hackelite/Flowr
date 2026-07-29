@@ -43,7 +43,7 @@ from storage import (
     get_whatsapp_account_by_id,
     update_message_status_by_meta_message_id,
     get_whatsapp_account_for_client,
-    get_active_trigger_rules,
+    get_workflows_for_client,
     get_active_or_waiting_workflow_runs_for_contact,
     upsert_conversation_metadata,
     get_conversation_metadata,
@@ -1021,6 +1021,7 @@ def start_new_run(
     first_message_type: str = "text",
     contact_name: str | None = None,
     wamid: str | None = None,
+    trigger_reason: str | None = None,
 ):
     run = WorkflowRun(
         id=make_workflow_run_id(workflow.id),
@@ -1039,6 +1040,22 @@ def start_new_run(
     )
 
     save_workflow_run(run)
+
+    if trigger_reason:
+        sys_msg = MessageRecord(
+            id=f"msg:sys:{run.id}",
+            client_id=run.client_id,
+            whatsapp_account_id=run.whatsapp_account_id,
+            workflow_id=run.workflow_id,
+            workflow_run_id=run.id,
+            contact_phone=run.contact_phone,
+            direction="system",
+            text=trigger_reason,
+            status="delivered",
+            created_at=now_utc(),
+        )
+        save_message(sys_msg)
+
     if first_message_text is not None:
         create_incoming_message(
             client_id=run.client_id,
@@ -1196,44 +1213,52 @@ def process_incoming_message(
             }
 
 
-    active_rules = get_active_trigger_rules(account.client_id)
+    all_workflows = get_workflows_for_client(account.client_id)
     matched_workflow = None
-    for rule in active_rules:
-        if rule.match_type == "exact" and text.strip().lower() == rule.keyword.strip().lower():
-            wf = get_workflow_by_id(rule.workflow_id)
-            if wf and wf.status == "published" and not wf.deleted:
-                matched_workflow = wf
-                break
-        elif rule.match_type == "contains" and rule.keyword.strip().lower() in text.strip().lower():
-            wf = get_workflow_by_id(rule.workflow_id)
-            if wf and wf.status == "published" and not wf.deleted:
-                matched_workflow = wf
-                break
+    trigger_reason = None
+    default_workflow = None
 
-    if matched_workflow:
-        workflow = matched_workflow
-    else:
-        published_workflows = get_published_workflows_for_account(
-            client_id=account.client_id,
-            whatsapp_account_id=account.id,
-        )
+    import difflib
+    
+    text_lower = text.strip().lower()
+    for wf in all_workflows:
+        if wf.is_default:
+            default_workflow = wf
+            
+        if not wf.trigger_on or wf.deleted:
+            continue
+            
+        for rule in wf.trigger_keywords:
+            keyword_lower = rule.keyword.strip().lower()
+            if rule.match_type == "exact":
+                if text_lower == keyword_lower:
+                    matched_workflow = wf
+                    trigger_reason = f"Workflow '{wf.name}' started (Exact Match on '{rule.keyword}')"
+                    break
+            elif rule.match_type == "fuzzy":
+                ratio = int(difflib.SequenceMatcher(None, text_lower, keyword_lower).ratio() * 100)
+                if ratio >= rule.fuzzy_threshold:
+                    matched_workflow = wf
+                    trigger_reason = f"Workflow '{wf.name}' started (Fuzzy Match {ratio}% on '{rule.keyword}')"
+                    break
+        
+        if matched_workflow:
+            break
 
-        if not published_workflows:
-            raise HTTPException(
-                status_code=404,
-                detail="No published workflow found for this WhatsApp account.",
-            )
+    if not matched_workflow:
+        if default_workflow and not default_workflow.deleted:
+            matched_workflow = default_workflow
+            trigger_reason = f"Workflow '{default_workflow.name}' started (Default)"
+            
+    if not matched_workflow:
+        return {
+            "mode": "ignored_user_message",
+            "source": source,
+            "from_phone": from_phone,
+            "reason": "No matching trigger and no default workflow found."
+        }
 
-        if len(published_workflows) > 1:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Multiple published workflows found for this WhatsApp account. "
-                    "For now, keep only one workflow published."
-                ),
-            )
-
-        workflow = published_workflows[0]
+    workflow = matched_workflow
 
     result = start_new_run(
         workflow=workflow,
@@ -1242,6 +1267,7 @@ def process_incoming_message(
         first_message_type=message_type,
         contact_name=profile_name,
         wamid=wamid,
+        trigger_reason=trigger_reason,
     )
 
     return {

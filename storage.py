@@ -11,7 +11,6 @@ from database import (
     workflow_node_runs_collection,
     messages_collection,
     node_responses_collection,
-    trigger_rules_collection,
     conversation_metadata_collection,
 )
 from models import (
@@ -24,7 +23,6 @@ from models import (
     WorkflowNodeRun,
     MessageRecord,
     NodeResponse,
-    TriggerRule,
     ConversationMetadata,
 )
 
@@ -597,40 +595,6 @@ def get_all_workflow_runs(client_id: str, limit: int = 100) -> list[WorkflowRun]
         parse_model(WorkflowRun, document)
         for document in documents
     ]
-
-
-def save_trigger_rule(rule: TriggerRule):
-    upsert_document(
-        trigger_rules_collection,
-        {"id": rule.id},
-        model_to_dict(rule),
-    )
-
-
-def get_trigger_rules_for_client(client_id: str) -> list[TriggerRule]:
-    documents = trigger_rules_collection.find(
-        {"client_id": client_id}
-    ).sort("created_at", -1)
-
-    return [
-        parse_model(TriggerRule, document)
-        for document in documents
-    ]
-
-
-def get_active_trigger_rules(client_id: str) -> list[TriggerRule]:
-    documents = trigger_rules_collection.find(
-        {"client_id": client_id, "is_active": {"$ne": False}}
-    )
-
-    return [
-        parse_model(TriggerRule, document)
-        for document in documents
-    ]
-
-
-def delete_trigger_rule(rule_id: str):
-    trigger_rules_collection.delete_one({"id": rule_id})
 
 
 def get_all_conversation_metadata_for_client(client_id: str) -> list[ConversationMetadata]:
